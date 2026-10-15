@@ -1,0 +1,23 @@
+@using BTCPayServer.Abstractions.Contracts
+@using BTCPayServer.Plugins.Usdc.Controllers
+@using BTCPayServer.Client
+@inject IScopeProvider ScopeProvider
+@{
+    var storeId = ScopeProvider.GetCurrentStoreId();
+    var isActive = !string.IsNullOrEmpty(storeId) &&
+                   ViewContext.RouteData.Values.TryGetValue("Controller", out var controller) && controller is not null &&
+                   nameof(UIUsdcStoreController).StartsWith(controller.ToString() ?? string.Empty, StringComparison.InvariantCultureIgnoreCase);
+}
+@if (!string.IsNullOrEmpty(storeId))
+{
+    <li class="nav-item" permission="@Policies.CanModifyStoreSettings">
+        <a class="nav-link @(isActive ? "active" : "")"
+           asp-area=""
+           asp-controller="UIUsdcStore"
+           asp-action="SolanaSettings"
+           asp-route-storeId="@storeId">
+            <img src="~/Resources/usdc.svg" alt="" width="18" height="18" class="me-2" />
+            <span>USDC (Solana)</span>
+        </a>
+    </li>
+}

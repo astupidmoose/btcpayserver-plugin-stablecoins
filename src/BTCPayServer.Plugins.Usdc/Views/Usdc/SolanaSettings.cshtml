@@ -1,0 +1,43 @@
+@using BTCPayServer.Abstractions.Models
+@using BTCPayServer.Plugins.Usdc.Controllers
+@model SolanaSettingsViewModel
+@{
+    ViewData.SetLayoutModel(new LayoutModel("USDC-SOLANA", "USDC (Solana)"));
+    Layout = "_Layout";
+}
+
+<partial name="_StatusMessage" />
+
+<div class="sticky-header">
+    <h2>@ViewData["Title"]</h2>
+</div>
+
+<div class="row">
+    <div class="col-xl-8 col-xxl-constrain">
+        <p class="text-secondary">
+            Customers pay USDC on Solana straight to the wallet below. Each invoice gets its own
+            <a href="https://docs.solanapay.com/spec#reference" target="_blank" rel="noreferrer noopener">Solana Pay reference</a>,
+            which is how payments are matched to invoices. Network: <strong>@Model.Cluster</strong>.
+        </p>
+        @if (!ViewContext.ModelState.IsValid)
+        {
+            <div asp-validation-summary="All" class="text-danger"></div>
+        }
+        <form method="post" asp-action="SolanaSettings" asp-route-storeId="@Context.GetRouteValue("storeId")">
+            <div class="form-group">
+                <label asp-for="Address" class="form-label"></label>
+                <input asp-for="Address" class="form-control font-monospace" autocomplete="off" spellcheck="false" required />
+                <span asp-validation-for="Address" class="text-danger"></span>
+                <div class="form-text">
+                    The wallet (owner) address, not the USDC token account. Only an address is stored here: BTCPay never holds the wallet's keys.
+                    USDC mint: <code>@Model.UsdcMint</code>.
+                </div>
+            </div>
+            <div class="form-group d-flex align-items-center">
+                <input asp-for="Enabled" type="checkbox" class="btcpay-toggle me-3" />
+                <label asp-for="Enabled" class="form-check-label"></label>
+            </div>
+            <button type="submit" class="btn btn-primary" id="Save">Save</button>
+        </form>
+    </div>
+</div>
