@@ -1,0 +1,53 @@
+@using System.Globalization
+@using BTCPayServer.Payments
+@using BTCPayServer.Plugins.Usdc.Payments
+@using BTCPayServer.Services
+@using BTCPayServer.Services.Invoices
+@inject DisplayFormatter DisplayFormatter
+@inject TransactionLinkProviders TransactionLinkProviders
+@inject PaymentMethodHandlerDictionary Handlers
+@model BTCPayServer.Models.InvoicingModels.InvoiceDetailsModel
+@{
+    var payments = Model.Payments
+        .Where(p => p.PaymentMethodId == UsdcPlugin.SolanaUsdcPaymentMethodId)
+        .Select(p =>
+        {
+            var handler = (SolanaUsdcPaymentMethodHandler)Handlers[p.PaymentMethodId];
+            var data = handler.ParsePaymentDetails(p.Details);
+            return new
+            {
+                Payment = p,
+                Data = data,
+                Link = TransactionLinkProviders.GetTransactionLink(p.PaymentMethodId, data.Signature)
+            };
+        }).ToList();
+}
+@if (payments.Any())
+{
+    <section>
+        <h5>USDC (Solana) payments</h5>
+        <table class="table table-hover">
+            <thead>
+            <tr>
+                <th>Transaction</th>
+                <th>Paid from</th>
+                <th>Commitment</th>
+                <th class="text-end">Paid</th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var p in payments)
+            {
+                <tr>
+                    <td><vc:truncate-center text="@p.Data.Signature" link="@p.Link" classes="truncate-center-id" /></td>
+                    <td><vc:truncate-center text="@(p.Data.Payer ?? "")" classes="truncate-center-id" /></td>
+                    <td>@(p.Data.ConfirmationStatus ?? "unknown")</td>
+                    <td class="payment-value text-end text-nowrap">
+                        <span data-sensitive class="text-success">@DisplayFormatter.Currency(p.Payment.Value, p.Payment.Currency)</span>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </section>
+}
