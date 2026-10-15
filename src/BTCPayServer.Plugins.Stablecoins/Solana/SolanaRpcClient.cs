@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
-namespace BTCPayServer.Plugins.Usdc.Solana;
+namespace BTCPayServer.Plugins.Stablecoins.Solana;
 
 public class SolanaRpcException(string message) : Exception(message);
 

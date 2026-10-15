@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using NBitcoin.DataEncoders;
 
-namespace BTCPayServer.Plugins.Usdc.Solana;
+namespace BTCPayServer.Plugins.Stablecoins.Solana;
 
 /// <summary>
 /// Helpers for the Solana Pay transfer request spec:
@@ -68,7 +68,7 @@ public static class SolanaPay
     /// </summary>
     public static string FormatAmount(decimal amount)
     {
-        amount = Math.Round(amount, UsdcPlugin.UsdcDivisibility, MidpointRounding.ToPositiveInfinity);
+        amount = Math.Round(amount, StablecoinsPlugin.UsdcDivisibility, MidpointRounding.ToPositiveInfinity);
         return amount.ToString("0.######", CultureInfo.InvariantCulture);
     }
 }

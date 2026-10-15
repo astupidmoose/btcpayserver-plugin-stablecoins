@@ -9,14 +9,14 @@ using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
 using BTCPayServer.Events;
 using BTCPayServer.Payments;
-using BTCPayServer.Plugins.Usdc.Payments;
-using BTCPayServer.Plugins.Usdc.Solana;
+using BTCPayServer.Plugins.Stablecoins.Payments;
+using BTCPayServer.Plugins.Stablecoins.Solana;
 using BTCPayServer.Services.Invoices;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 
-namespace BTCPayServer.Plugins.Usdc.Services;
+namespace BTCPayServer.Plugins.Stablecoins.Services;
 
 /// <summary>
 /// Polls Solana for every invoice BTCPay is monitoring with an active USDC (Solana) prompt:
@@ -34,7 +34,7 @@ public class SolanaUsdcListener(
     SolanaChainConfiguration chain,
     ILogger<SolanaUsdcListener> logger) : BackgroundService
 {
-    static readonly PaymentMethodId Pmi = UsdcPlugin.SolanaUsdcPaymentMethodId;
+    static readonly PaymentMethodId Pmi = StablecoinsPlugin.SolanaUsdcPaymentMethodId;
 
     // Signatures already examined that did not pay this invoice (failed, wrong mint, wrong recipient).
     // Kept in memory so a poll does not refetch them; a restart simply re-examines them once.
@@ -168,7 +168,7 @@ public class SolanaUsdcListener(
             Created = transfer.BlockTime is { } t ? DateTimeOffset.FromUnixTimeSeconds(t) : DateTimeOffset.UtcNow,
             Status = GetStatus(confirmationStatus, invoice.SpeedPolicy),
             Amount = transfer.Amount,
-            Currency = UsdcPlugin.UsdcCurrency,
+            Currency = StablecoinsPlugin.UsdcCurrency,
         }.Set(invoice, handler, data);
 
         var payment = await paymentService.AddPayment(paymentData, [transfer.Signature]);

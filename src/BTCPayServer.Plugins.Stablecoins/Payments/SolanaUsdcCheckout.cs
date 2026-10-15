@@ -1,15 +1,15 @@
 #nullable enable
 using BTCPayServer.Payments;
 using BTCPayServer.Payments.Bitcoin;
-using BTCPayServer.Plugins.Usdc.Solana;
+using BTCPayServer.Plugins.Stablecoins.Solana;
 using BTCPayServer.Services.Invoices;
 using Microsoft.AspNetCore.Mvc;
 
-namespace BTCPayServer.Plugins.Usdc.Payments;
+namespace BTCPayServer.Plugins.Stablecoins.Payments;
 
 public class SolanaUsdcPaymentLinkExtension(SolanaUsdcPaymentMethodHandler handler) : IPaymentLinkExtension
 {
-    public PaymentMethodId PaymentMethodId => UsdcPlugin.SolanaUsdcPaymentMethodId;
+    public PaymentMethodId PaymentMethodId => StablecoinsPlugin.SolanaUsdcPaymentMethodId;
 
     public string? GetPaymentLink(PaymentPrompt prompt, IUrlHelper? urlHelper) => GetPaymentLink(prompt, label: null);
 
@@ -32,7 +32,7 @@ public class SolanaUsdcPaymentLinkExtension(SolanaUsdcPaymentMethodHandler handl
 /// </summary>
 public class SolanaUsdcCheckoutModelExtension(SolanaUsdcPaymentLinkExtension paymentLink) : ICheckoutModelExtension
 {
-    public PaymentMethodId PaymentMethodId => UsdcPlugin.SolanaUsdcPaymentMethodId;
+    public PaymentMethodId PaymentMethodId => StablecoinsPlugin.SolanaUsdcPaymentMethodId;
     public string Image => "Resources/usdc.svg";
     public string Badge => "";
 

@@ -5,7 +5,7 @@ using System.Linq;
 using System.Numerics;
 using Newtonsoft.Json.Linq;
 
-namespace BTCPayServer.Plugins.Usdc.Solana;
+namespace BTCPayServer.Plugins.Stablecoins.Solana;
 
 public record UsdcTransfer(string Signature, decimal Amount, ulong Slot, string? Payer, long? BlockTime);
 
@@ -26,7 +26,7 @@ public static class UsdcTransferParser
     }
 
     public static (Outcome Outcome, UsdcTransfer? Transfer) Parse(JObject transaction, string recipientOwner,
-        string mint, string reference, int decimals = UsdcPlugin.UsdcDivisibility)
+        string mint, string reference, int decimals = StablecoinsPlugin.UsdcDivisibility)
     {
         var signature = transaction["transaction"]?["signatures"]?.FirstOrDefault()?.Value<string>() ?? "";
         var meta = transaction["meta"] as JObject;
