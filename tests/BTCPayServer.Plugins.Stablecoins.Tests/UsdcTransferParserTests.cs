@@ -1,7 +1,7 @@
-using BTCPayServer.Plugins.Usdc.Solana;
+using BTCPayServer.Plugins.Stablecoins.Solana;
 using Newtonsoft.Json.Linq;
 
-namespace BTCPayServer.Plugins.Usdc.Tests;
+namespace BTCPayServer.Plugins.Stablecoins.Tests;
 
 public class UsdcTransferParserTests
 {

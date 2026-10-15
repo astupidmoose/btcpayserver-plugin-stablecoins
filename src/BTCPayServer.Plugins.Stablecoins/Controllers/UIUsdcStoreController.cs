@@ -9,14 +9,14 @@ using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Client;
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
-using BTCPayServer.Plugins.Usdc.Payments;
-using BTCPayServer.Plugins.Usdc.Solana;
+using BTCPayServer.Plugins.Stablecoins.Payments;
+using BTCPayServer.Plugins.Stablecoins.Solana;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-namespace BTCPayServer.Plugins.Usdc.Controllers;
+namespace BTCPayServer.Plugins.Stablecoins.Controllers;
 
 [Route("stores/{storeId}/usdc/solana")]
 [Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie)]
@@ -27,7 +27,7 @@ public class UIUsdcStoreController(
     SolanaChainConfiguration chain,
     SolanaRpcClient rpc) : Controller
 {
-    public const string SettingsView = UsdcPlugin.ViewsDirectory + "/SolanaSettings.cshtml";
+    public const string SettingsView = StablecoinsPlugin.ViewsDirectory + "/SolanaSettings.cshtml";
 
     StoreData StoreData => HttpContext.GetStoreData();
 
@@ -35,8 +35,8 @@ public class UIUsdcStoreController(
     public IActionResult SolanaSettings()
     {
         var store = StoreData;
-        var config = store.GetPaymentMethodConfig<SolanaUsdcPaymentMethodConfig>(UsdcPlugin.SolanaUsdcPaymentMethodId, handlers);
-        var excluded = store.GetStoreBlob().GetExcludedPaymentMethods().Match(UsdcPlugin.SolanaUsdcPaymentMethodId);
+        var config = store.GetPaymentMethodConfig<SolanaUsdcPaymentMethodConfig>(StablecoinsPlugin.SolanaUsdcPaymentMethodId, handlers);
+        var excluded = store.GetStoreBlob().GetExcludedPaymentMethods().Match(StablecoinsPlugin.SolanaUsdcPaymentMethodId);
         return View(SettingsView, new SolanaSettingsViewModel
         {
             Address = config?.Address,
@@ -58,10 +58,10 @@ public class UIUsdcStoreController(
             return View(SettingsView, vm);
 
         var store = StoreData;
-        var handler = (SolanaUsdcPaymentMethodHandler)handlers[UsdcPlugin.SolanaUsdcPaymentMethodId];
+        var handler = (SolanaUsdcPaymentMethodHandler)handlers[StablecoinsPlugin.SolanaUsdcPaymentMethodId];
         store.SetPaymentMethodConfig(handler, new SolanaUsdcPaymentMethodConfig { Address = vm.Address });
         var blob = store.GetStoreBlob();
-        blob.SetExcluded(UsdcPlugin.SolanaUsdcPaymentMethodId, !vm.Enabled);
+        blob.SetExcluded(StablecoinsPlugin.SolanaUsdcPaymentMethodId, !vm.Enabled);
         store.SetStoreBlob(blob);
         await storeRepository.UpdateStore(store);
 

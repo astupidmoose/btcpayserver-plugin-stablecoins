@@ -16,9 +16,9 @@
     <File Path="README.md" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/BTCPayServer.Plugins.Usdc/BTCPayServer.Plugins.Usdc.csproj" />
+    <Project Path="src/BTCPayServer.Plugins.Stablecoins/BTCPayServer.Plugins.Stablecoins.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/BTCPayServer.Plugins.Usdc.Tests/BTCPayServer.Plugins.Usdc.Tests.csproj" />
+    <Project Path="tests/BTCPayServer.Plugins.Stablecoins.Tests/BTCPayServer.Plugins.Stablecoins.Tests.csproj" />
   </Folder>
 </Solution>

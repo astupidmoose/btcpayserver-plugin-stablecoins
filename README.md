@@ -1,6 +1,6 @@
-# USDC Gateway for BTCPay Server
+# Stablecoins for BTCPay Server
 
-A BTCPay Server plugin that adds USDC as a native payment method, paid straight into a wallet the merchant controls.
+A BTCPay Server plugin that adds stablecoins as native payment methods, paid straight into a wallet the merchant controls. It starts with USDC.
 
 This is **Phase 1: direct USDC on Solana**. Customers pay USDC from any Solana Pay wallet (Phantom, Solflare, Backpack and others), BTCPay matches the payment to the invoice through a Solana Pay reference key, and the rest (invoice states, webhooks, the WooCommerce connector) is BTCPay's own.
 
@@ -12,9 +12,9 @@ This is **Phase 1: direct USDC on Solana**. Customers pay USDC from any Solana P
 | Solana Pay transfer request in the checkout QR and wallet button | `Payments/SolanaUsdcCheckout.cs`, `Solana/SolanaPay.cs` |
 | Chain listener: finds, verifies and confirms payments | `Services/SolanaUsdcListener.cs`, `Solana/UsdcTransferParser.cs` |
 | Minimal Solana JSON-RPC client | `Solana/SolanaRpcClient.cs` |
-| Store settings page (Wallets → USDC (Solana)) | `Controllers/UIUsdcStoreController.cs`, `Views/Usdc/` |
-| USDC payments table on the invoice page, linked to Solana Explorer | `Views/Usdc/ViewSolanaUsdcPaymentData.cshtml` |
-| USDC currency data and a default rate rule | `UsdcPlugin.cs` |
+| Store settings page (Wallets → USDC (Solana)) | `Controllers/UIUsdcStoreController.cs`, `Views/Stablecoins/` |
+| USDC payments table on the invoice page, linked to Solana Explorer | `Views/Stablecoins/ViewSolanaUsdcPaymentData.cshtml` |
+| USDC currency data and a default rate rule | `StablecoinsPlugin.cs` |
 
 ## How a payment works
 
@@ -58,8 +58,8 @@ Requires the .NET 10 SDK and the BTCPay submodule (pinned to v2.4.5):
 
 ```bash
 git submodule update --init --recursive
-dotnet build src/BTCPayServer.Plugins.Usdc/BTCPayServer.Plugins.Usdc.csproj
-dotnet test --project tests/BTCPayServer.Plugins.Usdc.Tests/BTCPayServer.Plugins.Usdc.Tests.csproj
+dotnet build src/BTCPayServer.Plugins.Stablecoins/BTCPayServer.Plugins.Stablecoins.csproj
+dotnet test --project tests/BTCPayServer.Plugins.Stablecoins.Tests/BTCPayServer.Plugins.Stablecoins.Tests.csproj
 ```
 
 To run it inside a local BTCPay dev instance, run `./plugin-register.sh` and start BTCPay from `submodules/btcpayserver` (see the [plugin template](https://github.com/btcpayserver/btcpayserver-plugin-template)).
@@ -67,11 +67,11 @@ To run it inside a local BTCPay dev instance, run `./plugin-register.sh` and sta
 To make an installable package the same way the [Plugin Builder](https://plugin-builder.btcpayserver.org/) does:
 
 ```bash
-dotnet publish src/BTCPayServer.Plugins.Usdc/BTCPayServer.Plugins.Usdc.csproj -c Release -o out/publish
-dotnet run --project submodules/btcpayserver/BTCPayServer.PluginPacker -c Release -- out/publish BTCPayServer.Plugins.Usdc out/pack
+dotnet publish src/BTCPayServer.Plugins.Stablecoins/BTCPayServer.Plugins.Stablecoins.csproj -c Release -o out/publish
+dotnet run --project submodules/btcpayserver/BTCPayServer.PluginPacker -c Release -- out/publish BTCPayServer.Plugins.Stablecoins out/pack
 ```
 
-Upload the resulting `.btcpay` file under Server Settings → Plugins → Upload. On the Plugin Builder, point a build at this repository with plugin directory `src/BTCPayServer.Plugins.Usdc` (it requires exactly one `.csproj` there).
+Upload the resulting `.btcpay` file under Server Settings → Plugins → Upload. On the Plugin Builder, point a build at this repository with plugin directory `src/BTCPayServer.Plugins.Stablecoins` (it requires exactly one `.csproj` there).
 
 ## Phase 1 test plan (BTCPay test store)
 

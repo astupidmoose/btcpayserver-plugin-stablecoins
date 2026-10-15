@@ -1,1 +1,1 @@
-PROJECT="BTCPayServer.Plugins.Usdc"
+PROJECT="BTCPayServer.Plugins.Stablecoins"

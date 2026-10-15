@@ -1,9 +1,9 @@
 using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
-using BTCPayServer.Plugins.Usdc.Services;
-using BTCPayServer.Plugins.Usdc.Solana;
+using BTCPayServer.Plugins.Stablecoins.Services;
+using BTCPayServer.Plugins.Stablecoins.Solana;
 
-namespace BTCPayServer.Plugins.Usdc.Tests;
+namespace BTCPayServer.Plugins.Stablecoins.Tests;
 
 public class SolanaPayTests
 {
@@ -84,7 +84,7 @@ public class RateRuleTests
     [Fact]
     public void DefaultRateRulesResolveUsdcToStoreCurrency()
     {
-        var rules = new DefaultRules(UsdcPlugin.DefaultRateRules).Rules;
+        var rules = new DefaultRules(StablecoinsPlugin.DefaultRateRules).Rules;
         var rule = rules.GetRuleFor(new BTCPayServer.Rating.CurrencyPair("USDC", "CAD"));
         var text = rule.ToString();
         Assert.Contains("kraken(USDC_USD)", text);

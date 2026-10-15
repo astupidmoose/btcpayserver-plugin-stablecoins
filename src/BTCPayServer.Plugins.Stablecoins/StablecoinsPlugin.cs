@@ -5,9 +5,9 @@ using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Configuration;
 using BTCPayServer.Hosting;
 using BTCPayServer.Payments;
-using BTCPayServer.Plugins.Usdc.Payments;
-using BTCPayServer.Plugins.Usdc.Services;
-using BTCPayServer.Plugins.Usdc.Solana;
+using BTCPayServer.Plugins.Stablecoins.Payments;
+using BTCPayServer.Plugins.Stablecoins.Services;
+using BTCPayServer.Plugins.Stablecoins.Solana;
 using BTCPayServer.Services;
 using BTCPayServer.Services.Rates;
 using Microsoft.Extensions.Configuration;
@@ -15,13 +15,13 @@ using Microsoft.Extensions.DependencyInjection;
 using NBitcoin;
 using NBXplorer;
 
-namespace BTCPayServer.Plugins.Usdc;
+namespace BTCPayServer.Plugins.Stablecoins;
 
-public class UsdcPlugin : BaseBTCPayServerPlugin
+public class StablecoinsPlugin : BaseBTCPayServerPlugin
 {
     public const string UsdcCurrency = "USDC";
     public const int UsdcDivisibility = 6;
-    public const string ViewsDirectory = "/Views/Usdc";
+    public const string ViewsDirectory = "/Views/Stablecoins";
 
     public static readonly PaymentMethodId SolanaUsdcPaymentMethodId = new("USDC-SOLANA");
 

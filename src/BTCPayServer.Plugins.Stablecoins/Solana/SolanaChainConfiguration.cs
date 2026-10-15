@@ -1,7 +1,7 @@
 #nullable enable
 using System;
 
-namespace BTCPayServer.Plugins.Usdc.Solana;
+namespace BTCPayServer.Plugins.Stablecoins.Solana;
 
 /// <summary>
 /// Server-wide Solana settings. Chosen from BTCPay's own network type

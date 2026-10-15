@@ -5,8 +5,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
-    <Product>USDC Gateway</Product>
-    <Description>Accept USDC as a native BTCPay payment method, settled directly to a merchant-controlled wallet. Phase 1: USDC on Solana via Solana Pay.</Description>
+    <Product>Stablecoins</Product>
+    <Description>Accept stablecoins as native BTCPay payment methods, paid directly to a merchant-controlled wallet. Starts with USDC on Solana via Solana Pay.</Description>
     <Version>0.1.0</Version>
   </PropertyGroup>
 

@@ -3,11 +3,11 @@ using System;
 using System.Threading.Tasks;
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
-using BTCPayServer.Plugins.Usdc.Solana;
+using BTCPayServer.Plugins.Stablecoins.Solana;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
-namespace BTCPayServer.Plugins.Usdc.Payments;
+namespace BTCPayServer.Plugins.Stablecoins.Payments;
 
 /// <summary>
 /// USDC on Solana as a BTCPay payment method. Every prompt pays the merchant's
@@ -16,14 +16,14 @@ namespace BTCPayServer.Plugins.Usdc.Payments;
 /// </summary>
 public class SolanaUsdcPaymentMethodHandler(SolanaChainConfiguration chain) : IPaymentMethodHandler
 {
-    public PaymentMethodId PaymentMethodId => UsdcPlugin.SolanaUsdcPaymentMethodId;
+    public PaymentMethodId PaymentMethodId => StablecoinsPlugin.SolanaUsdcPaymentMethodId;
     public JsonSerializer Serializer { get; } = BlobSerializer.CreateSerializer().Serializer;
     public SolanaChainConfiguration Chain => chain;
 
     public Task BeforeFetchingRates(PaymentMethodContext context)
     {
-        context.Prompt.Currency = UsdcPlugin.UsdcCurrency;
-        context.Prompt.Divisibility = UsdcPlugin.UsdcDivisibility;
+        context.Prompt.Currency = StablecoinsPlugin.UsdcCurrency;
+        context.Prompt.Divisibility = StablecoinsPlugin.UsdcDivisibility;
         return Task.CompletedTask;
     }
 

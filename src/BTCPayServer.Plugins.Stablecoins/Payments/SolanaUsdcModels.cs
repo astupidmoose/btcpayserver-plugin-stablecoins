@@ -1,6 +1,6 @@
 #nullable enable
 
-namespace BTCPayServer.Plugins.Usdc.Payments;
+namespace BTCPayServer.Plugins.Stablecoins.Payments;
 
 /// <summary>
 /// Store-level configuration of the USDC (Solana) payment method.

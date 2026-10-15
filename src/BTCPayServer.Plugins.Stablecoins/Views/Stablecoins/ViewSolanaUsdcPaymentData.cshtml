@@ -1,6 +1,6 @@
 @using System.Globalization
 @using BTCPayServer.Payments
-@using BTCPayServer.Plugins.Usdc.Payments
+@using BTCPayServer.Plugins.Stablecoins.Payments
 @using BTCPayServer.Services
 @using BTCPayServer.Services.Invoices
 @inject DisplayFormatter DisplayFormatter
@@ -9,7 +9,7 @@
 @model BTCPayServer.Models.InvoicingModels.InvoiceDetailsModel
 @{
     var payments = Model.Payments
-        .Where(p => p.PaymentMethodId == UsdcPlugin.SolanaUsdcPaymentMethodId)
+        .Where(p => p.PaymentMethodId == StablecoinsPlugin.SolanaUsdcPaymentMethodId)
         .Select(p =>
         {
             var handler = (SolanaUsdcPaymentMethodHandler)Handlers[p.PaymentMethodId];
