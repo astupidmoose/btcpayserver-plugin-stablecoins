@@ -67,21 +67,53 @@ public class UISwapCheckoutController(
         public string? Network { get; set; }
     }
 
-    /// <summary>The USDC or USDT checkout's network picker. The deposit address for that network is prepared in the background.</summary>
-    [HttpPost("deposits/{invoiceId}/{paymentMethodId}/network")]
-    public async Task<IActionResult> Network(string invoiceId, string paymentMethodId, [FromBody] NetworkChoice body)
+    public class OptionChoice
     {
-        if (!PaymentMethodId.TryParse(paymentMethodId, out var pmi) || SwapSourceChain.Find(pmi) is not { Provider: SwapProvider.Intents } chain)
+        /// <summary>USDC or USDT; null goes back to the wallet panel.</summary>
+        public string? Option { get; set; }
+    }
+
+    /// <summary>"Send USDC from an exchange" on a token checkout, or back to the wallet panel.</summary>
+    [HttpPost("deposits/{invoiceId}/{paymentMethodId}/option")]
+    public async Task<IActionResult> Option(string invoiceId, string paymentMethodId, [FromBody] OptionChoice body)
+    {
+        if (await TokenCheckout(invoiceId, paymentMethodId) is not { } config)
             return NotFound();
+        if (body?.Option is not { } code)
+        {
+            intents.Choose(invoiceId, null);
+            return Json(new { ok = true });
+        }
+        if (config.EnabledExchangeOptions().FirstOrDefault(o => o.Code.Equals(code, StringComparison.OrdinalIgnoreCase)) is not { } option)
+            return BadRequest(new { error = "That option is not available for this payment." });
+        intents.Choose(invoiceId, option);
+        await Note(invoiceId, $"option:{option.Code}", $"Customer chose to send {option.Ticker} from an exchange (NEAR Intents).");
+        return Json(new { ok = true });
+    }
+
+    /// <summary>The exchange option's network picker. The deposit address for that network is prepared in the background.</summary>
+    [HttpPost("deposits/{invoiceId}/{paymentMethodId}/{option}/network")]
+    public async Task<IActionResult> Network(string invoiceId, string paymentMethodId, string option, [FromBody] NetworkChoice body)
+    {
+        if (await TokenCheckout(invoiceId, paymentMethodId) is not { } config ||
+            config.EnabledExchangeOptions().FirstOrDefault(o => o.Code.Equals(option, StringComparison.OrdinalIgnoreCase)) is not { } chain)
+            return NotFound();
+        if (body?.Network is not { } network || !intents.Select(chain, config, invoiceId, network))
+            return BadRequest(new { error = "That network is not available for this payment." });
+        await Note(invoiceId, $"network:{chain.Code}:{network}", $"Customer chose to send {chain.Ticker} on {chain.Networks.First(n => n.Code == network).Name}.");
+        return Json(new { ok = true });
+    }
+
+    /// <summary>The settings of a token checkout of an unpaid invoice, or null.</summary>
+    async Task<SwapToBtcPaymentMethodConfig?> TokenCheckout(string invoiceId, string paymentMethodId)
+    {
+        if (!PaymentMethodId.TryParse(paymentMethodId, out var pmi) || SwapSourceChain.Find(pmi) is not { Provider: SwapProvider.Lifi })
+            return null;
         var invoice = await invoiceRepository.GetInvoice(invoiceId);
         if (invoice is null || invoice.Status != InvoiceStatus.New || invoice.GetPaymentPrompt(pmi) is not { Activated: true })
-            return NotFound();
+            return null;
         var store = await storeRepository.FindStore(invoice.StoreId);
-        var config = store?.GetPaymentMethodConfig<SwapToBtcPaymentMethodConfig>(pmi, handlers);
-        if (config is null || body?.Network is not { } network || !intents.Select(chain, config, invoiceId, network))
-            return BadRequest(new { error = "That network is not available for this payment." });
-        await Note(invoiceId, $"network:{network}", $"Customer chose to pay {chain.Name} on {chain.Networks.First(n => n.Code == network).Name}.");
-        return Json(new { ok = true });
+        return store?.GetPaymentMethodConfig<SwapToBtcPaymentMethodConfig>(pmi, handlers);
     }
 
     public static bool IsTransactionId(string? txHash) =>

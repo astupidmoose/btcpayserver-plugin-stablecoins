@@ -14,7 +14,8 @@ public enum SwapProvider
     Thorchain,
     /// <summary>
     /// Stablecoins through NEAR Intents' 1Click API: the customer picks a network and sends an exact amount to a
-    /// one-time deposit address, from any wallet or exchange.
+    /// one-time deposit address, from any wallet or exchange. Not a payment method of its own (so WooCommerce never
+    /// lists it): an option inside the token checkouts, paid into that payment method's BTC address.
     /// </summary>
     Intents
 }
@@ -83,7 +84,7 @@ public record SwapSourceChain
         new() { Code = code, Name = name, Provider = SwapProvider.Thorchain, ThorAsset = asset, Ticker = ticker, Decimals = decimals, UriScheme = uriScheme, CoinImage = image, EvmChainId = evmChainId };
 
     static SwapSourceChain Intents(string symbol, params IntentsNetwork[] networks) =>
-        new() { Code = symbol, Name = $"{symbol} from exchange", Provider = SwapProvider.Intents, Ticker = symbol, Networks = networks, Decimals = 6 };
+        new() { Code = symbol, Name = $"{symbol} from an exchange", Provider = SwapProvider.Intents, Ticker = symbol, Networks = networks, Decimals = 6 };
 
     static readonly IntentsNetwork Eth = new("eth", "Ethereum", AddressFamily.Evm, "Resources/chains/ethereum.svg");
     static readonly IntentsNetwork Base = new("base", "Base", AddressFamily.Evm, "Resources/chains/base.svg");
@@ -123,12 +124,17 @@ public record SwapSourceChain
         Thor("AVAX", "AVAX", "AVAX.AVAX", "AVAX", 8, null, "Resources/chains/avalanche.svg", 43114),
         Thor("SOL", "SOL", "SOL.SOL", "SOL", 8, "solana", "Resources/chains/solana.svg"),
         Thor("TRX", "TRX", "TRON.TRX", "TRX", 6, null, "Resources/chains/tron.svg"),
-        // Stablecoins from any wallet or exchange: one payment method per coin, the network is picked at checkout.
+        // Stablecoins from any wallet or exchange: buttons on the token checkouts, the network is picked at checkout.
         Intents("USDC", Eth, Base, Arb, Pol, Sol, Bsc, Avax, Op) with { CoinImage = "Resources/chains/usdc.svg" },
         Intents("USDT", Eth, Tron, Bsc, Sol, Pol, Arb, Avax) with { CoinImage = "Resources/chains/usdt.svg" },
     ];
 
-    static readonly Dictionary<PaymentMethodId, SwapSourceChain> ByPmi = All.ToDictionary(c => c.PaymentMethodId);
+    /// <summary>The chains that are BTCPay payment methods (everything but the exchange options).</summary>
+    public static readonly SwapSourceChain[] PaymentMethods = All.Where(c => c.Provider != SwapProvider.Intents).ToArray();
+    /// <summary>"USDC from an exchange", "USDT from an exchange": offered inside the token (LI.FI) checkouts.</summary>
+    public static readonly SwapSourceChain[] ExchangeOptions = All.Where(c => c.Provider == SwapProvider.Intents).ToArray();
+
+    static readonly Dictionary<PaymentMethodId, SwapSourceChain> ByPmi = PaymentMethods.ToDictionary(c => c.PaymentMethodId);
 
     public static SwapSourceChain? Find(PaymentMethodId? pmi) =>
         pmi is not null && ByPmi.TryGetValue(pmi, out var chain) ? chain : null;

@@ -35,11 +35,13 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
     {
         var store = StoreData;
         var excluded = store.GetStoreBlob().GetExcludedPaymentMethods();
-        var configs = SwapSourceChain.All
+        var configs = SwapSourceChain.PaymentMethods
             .Select(c => (Chain: c, Config: store.GetPaymentMethodConfig<SwapToBtcPaymentMethodConfig>(c.PaymentMethodId, handlers)))
             .ToList();
         var any = await storeRepository.GetSettingAsync<SwapToBtcPaymentMethodConfig>(store.Id, StoreSettingName) ??
                   configs.Select(c => c.Config).FirstOrDefault(c => c is not null) ?? new SwapToBtcPaymentMethodConfig();
+        var chains = configs.Select(c => (c.Chain, Enabled: c.Config is not null && !excluded.Match(c.Chain.PaymentMethodId)))
+            .Concat(SwapSourceChain.ExchangeOptions.Select(c => (Chain: c, Enabled: any.ExchangeOptions.Contains(c.Code))));
         return View(SettingsView, new SwapSettingsViewModel
         {
             HasBtcWallet = store.GetDerivationSchemeSettings(handlers, "BTC") is not null,
@@ -59,14 +61,14 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             IntentsSlippageBps = any.IntentsSlippageBps,
             IntentsUrl = any.IntentsUrl,
             ThorMemolessUrl = any.MemolessUrl,
-            Chains = configs.Select(c => new SwapChainViewModel
+            Chains = chains.Select(c => new SwapChainViewModel
             {
                 Code = c.Chain.Code,
                 Name = c.Chain.Name,
                 PaymentMethodId = c.Chain.PaymentMethodId.ToString(),
                 Image = c.Chain.Image,
                 Provider = c.Chain.Provider,
-                Enabled = c.Config is not null && !excluded.Match(c.Chain.PaymentMethodId)
+                Enabled = c.Enabled
             }).ToList()
         });
     }
@@ -107,9 +109,13 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         if (config.RefundTron is { } tron && !(tron.StartsWith('T') && IsBase58(tron, 34, 34)))
             ModelState.AddModelError(nameof(vm.RefundTron), "A Tron address starts with T and has 34 characters.");
         var enabled = vm.Chains.Where(c => c.Enabled).Select(c => SwapSourceChain.Find(c.Code)).OfType<SwapSourceChain>().ToHashSet();
-        foreach (var chain in enabled.Where(c => c.Provider == SwapProvider.Intents))
+        var exchange = enabled.Where(c => c.Provider == SwapProvider.Intents).ToList();
+        config.ExchangeOptions = exchange.Select(c => c.Code).ToArray();
+        foreach (var chain in exchange)
             if (!Intents.IntentsDepositService.Networks(chain, config).Any())
                 ModelState.AddModelError(nameof(vm.RefundEvm), $"Add at least one refund address to offer {chain.Name}: NEAR Intents returns payments it cannot swap there.");
+        if (exchange.Count > 0 && !enabled.Any(c => c.Provider == SwapProvider.Lifi))
+            ModelState.AddModelError(string.Empty, "USDC and USDT from an exchange are offered on the token checkouts: turn on at least one token chain (Ethereum, Base...).");
         if (enabled.Count > 0 && !vm.HasBtcWallet)
             ModelState.AddModelError(string.Empty, "Set up the store's BTC on-chain wallet first: swapped BTC is paid into it.");
         if (!ModelState.IsValid)
@@ -126,7 +132,7 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         }
 
         var blob = store.GetStoreBlob();
-        foreach (var chain in SwapSourceChain.All)
+        foreach (var chain in SwapSourceChain.PaymentMethods)
         {
             var handler = handlers[chain.PaymentMethodId];
             var on = enabled.Contains(chain);

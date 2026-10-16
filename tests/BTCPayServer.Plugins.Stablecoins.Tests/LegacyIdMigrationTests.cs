@@ -33,4 +33,27 @@ public class LegacyIdMigrationTests
         // Running again changes nothing.
         Assert.False(LegacyIdMigration.Migrate(store));
     }
+
+    [Fact]
+    public void TurnsTheOldExchangePaymentMethodsIntoTokenCheckoutOptions()
+    {
+        var store = new StoreData { Id = "store" };
+        var settings = new JObject { ["integrator"] = "coincards", ["refundEvm"] = "0xabc" };
+        store.SetPaymentMethodConfig(new PaymentMethodId("LIFI_BASE"), settings);
+        store.SetPaymentMethodConfig(new PaymentMethodId("THOR_LITECOIN"), settings);
+        store.SetPaymentMethodConfig(new PaymentMethodId("NEAR_USDC"), settings);
+        store.SetPaymentMethodConfig(new PaymentMethodId("NEAR_USDT"), settings);
+        var blob = store.GetStoreBlob();
+        blob.SetExcluded(new PaymentMethodId("NEAR_USDT"), true);
+        store.SetStoreBlob(blob);
+
+        Assert.Equal(new[] { "USDC" }, LegacyIdMigration.MoveExchangeOptions(store));
+
+        Assert.Null(store.GetPaymentMethodConfig(new PaymentMethodId("NEAR_USDC")));
+        Assert.Null(store.GetPaymentMethodConfig(new PaymentMethodId("NEAR_USDT")));
+        Assert.False(store.GetStoreBlob().GetExcludedPaymentMethods().Match(new PaymentMethodId("NEAR_USDT")));
+        Assert.Equal(new[] { "USDC" }, store.GetPaymentMethodConfig(new PaymentMethodId("LIFI_BASE"))!["exchangeOptions"]!.ToObject<string[]>());
+        Assert.Null(store.GetPaymentMethodConfig(new PaymentMethodId("THOR_LITECOIN"))!["exchangeOptions"]);
+        Assert.Null(LegacyIdMigration.MoveExchangeOptions(store));
+    }
 }

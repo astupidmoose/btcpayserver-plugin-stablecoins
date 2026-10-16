@@ -1,4 +1,7 @@
 #nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace BTCPayServer.Plugins.Stablecoins.Swap;
 
@@ -43,6 +46,12 @@ public class SwapToBtcPaymentMethodConfig
     public string? RefundTron { get; set; }
     /// <summary>Price movement allowed on stablecoin swaps, in basis points. The amount shown includes it; any unused part is refunded.</summary>
     public int IntentsSlippageBps { get; set; } = SwapDefaults.IntentsSlippageBps;
+    /// <summary>The exchange options switched on (USDC, USDT), offered on the token checkouts. Not payment methods.</summary>
+    public string[] ExchangeOptions { get; set; } = [];
+
+    public IEnumerable<SwapSourceChain> EnabledExchangeOptions() =>
+        SwapSourceChain.ExchangeOptions.Where(c => ExchangeOptions.Contains(c.Code, StringComparer.OrdinalIgnoreCase) &&
+                                                   Intents.IntentsDepositService.Networks(c, this).Any());
 
     public string? RefundAddress(AddressFamily family) => family switch
     {

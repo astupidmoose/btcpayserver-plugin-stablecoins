@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import {
+  ChainType,
   convertQuoteToRoute,
   createClient,
   executeRoute,
@@ -321,7 +322,8 @@ function App({ opts, providers }) {
   const fromChain = Number(opts.fromChain);
 
   useEffect(() => {
-    getChains(client).then(setChains, (e) => setError(errorText(e)));
+    // LI.FI lists only EVM chains unless asked for the others.
+    getChains(client, { chainTypes: [ChainType.EVM, ChainType.SVM, ChainType.TVM] }).then(setChains, (e) => setError(errorText(e)));
   }, [client]);
 
   // The wallet list is LI.FI's own dialog (MUI); it reads the theme through CSS variables.

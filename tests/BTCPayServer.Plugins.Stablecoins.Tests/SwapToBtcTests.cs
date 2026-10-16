@@ -14,14 +14,14 @@ public class SwapToBtcTests
     [Fact]
     public void EveryChainHasItsOwnWooCommerceSafePaymentMethodId()
     {
-        var ids = SwapSourceChain.All.Select(c => c.PaymentMethodId.ToString()).ToList();
+        var ids = SwapSourceChain.PaymentMethods.Select(c => c.PaymentMethodId.ToString()).ToList();
         Assert.Equal(ids.Count, ids.Distinct().Count());
         // The WooCommerce plugin sends the id back with every '-' turned into '_', so the ids must not contain '-'.
         Assert.All(ids, id => Assert.Matches(new Regex("^[A-Z0-9_]+$"), id));
         Assert.Equal("LIFI_ETHEREUM", SwapSourceChain.Find("ethereum")!.PaymentMethodId.ToString());
         Assert.Equal("THOR_LITECOIN", SwapSourceChain.Find("litecoin")!.PaymentMethodId.ToString());
         // What BTCPay's Greenfield API does with the id WooCommerce sends.
-        Assert.All(SwapSourceChain.All, c =>
+        Assert.All(SwapSourceChain.PaymentMethods, c =>
         {
             Assert.True(BTCPayServer.Payments.PaymentMethodId.TryParse(c.PaymentMethodId.ToString().Replace('-', '_'), out var parsed));
             Assert.Equal(c.PaymentMethodId, parsed);
@@ -146,30 +146,19 @@ public class SwapToBtcTests
     }
 
     [Fact]
-    public void ExchangeOptionsAreButtonsNotTabsWhenThereAreOtherWaysToPay()
+    public void ExchangeOptionsAreNotPaymentMethods()
     {
-        static List<BTCPayServer.Models.InvoicingModels.CheckoutModel.AvailablePaymentMethod> Methods(params string[] ids) =>
-            ids.Select(id => new BTCPayServer.Models.InvoicingModels.CheckoutModel.AvailablePaymentMethod
-            {
-                PaymentMethodId = BTCPayServer.Payments.PaymentMethodId.Parse(id),
-                PaymentMethodName = id,
-                Displayed = true
-            }).ToList();
+        // WooCommerce lists every payment method as a gateway: USDC and USDT from an exchange live inside the token checkouts.
+        Assert.DoesNotContain(SwapSourceChain.PaymentMethods, c => c.Provider == SwapProvider.Intents);
+        Assert.Equal(new[] { "USDC", "USDT" }, SwapSourceChain.ExchangeOptions.Select(c => c.Code));
+        Assert.Null(SwapSourceChain.Find(BTCPayServer.Payments.PaymentMethodId.Parse("NEAR_USDC")));
 
-        var methods = Methods("BTC-CHAIN", "NEAR_USDC", "LIFI_ETHEREUM", "THOR_LITECOIN", "NEAR_USDT");
-        var buttons = SwapCheckoutExchangeOptions.Apply(methods);
-        Assert.Equal(new[] { "BTC-CHAIN", "LIFI_ETHEREUM", "THOR_LITECOIN" }, methods.Where(m => m.Displayed).Select(m => m.PaymentMethodName));
-        Assert.NotNull(buttons);
-        Assert.Equal(new[] { "NEAR_USDC", "NEAR_USDT" }, buttons!.Select(b => (string)b["paymentMethodId"]!));
-        Assert.Equal("Send USDC from an exchange", (string)buttons![0]["label"]!);
-
-        // No wallet checkout on a token chain to hold the buttons: the tabs stay.
-        var noTokens = Methods("BTC-CHAIN", "THOR_LITECOIN", "NEAR_USDC");
-        Assert.Null(SwapCheckoutExchangeOptions.Apply(noTokens));
-        Assert.All(noTokens, m => Assert.True(m.Displayed));
-        var only = Methods("NEAR_USDC", "NEAR_USDT");
-        Assert.Null(SwapCheckoutExchangeOptions.Apply(only));
-        Assert.All(only, m => Assert.True(m.Displayed));
-        Assert.Null(SwapCheckoutExchangeOptions.Apply(Methods("BTC-CHAIN")));
+        var config = new SwapToBtcPaymentMethodConfig { ExchangeOptions = ["USDC", "USDT"], RefundTron = "TXYZ" };
+        // Only USDT can be sent on Tron, the only network with a refund address.
+        Assert.Equal(new[] { "USDT" }, config.EnabledExchangeOptions().Select(c => c.Code));
+        config.RefundEvm = "0x" + new string('a', 40);
+        Assert.Equal(new[] { "USDC", "USDT" }, config.EnabledExchangeOptions().Select(c => c.Code));
+        config.ExchangeOptions = [];
+        Assert.Empty(config.EnabledExchangeOptions());
     }
 }
