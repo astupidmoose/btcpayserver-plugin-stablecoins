@@ -28,6 +28,7 @@ public class SwapToBtcPaymentLinkExtension(SwapToBtcPaymentMethodHandler handler
 public class SwapToBtcCheckoutModelExtension(SwapToBtcPaymentMethodHandler handler) : ICheckoutModelExtension
 {
     public const string CheckoutBodyComponentName = "StablecoinsSwapCheckout";
+    public const string ThorCheckoutBodyComponentName = "StablecoinsThorCheckout";
 
     public PaymentMethodId PaymentMethodId => handler.PaymentMethodId;
     public string Image => handler.Chain.Image;
@@ -40,23 +41,40 @@ public class SwapToBtcCheckoutModelExtension(SwapToBtcPaymentMethodHandler handl
         var configToken = context.Store.GetPaymentMethodConfig(handler.PaymentMethodId);
         var config = configToken is null ? new SwapToBtcPaymentMethodConfig() : handler.ParsePaymentMethodConfig(configToken);
 
-        context.Model.CheckoutBodyComponentName = CheckoutBodyComponentName;
         context.Model.ShowRecommendedFee = false;
         context.Model.ShowPayInWalletButton = false;
         context.Model.Address = address;
         context.Model.InvoiceBitcoinUrl = null;
         context.Model.InvoiceBitcoinUrlQR = null;
+        var chain = handler.Chain;
+        var sourceUrl = context.UrlHelper.Content($"~/plugins/stablecoins/swaps/{context.InvoiceEntity.Id}/{handler.PaymentMethodId}/source");
+        if (chain.Provider == SwapProvider.Thorchain)
+        {
+            context.Model.CheckoutBodyComponentName = ThorCheckoutBodyComponentName;
+            context.Model.AdditionalData["stablecoinsThor"] = new JObject
+            {
+                ["chainName"] = chain.Name,
+                ["ticker"] = chain.Ticker,
+                ["memoField"] = chain.MemoField,
+                ["btcAddress"] = address,
+                ["sourceUrl"] = sourceUrl,
+                ["depositUrl"] = context.UrlHelper.Content($"~/plugins/stablecoins/thorchain/{context.InvoiceEntity.Id}/{handler.PaymentMethodId}/deposit")
+            };
+            return;
+        }
+        context.Model.CheckoutBodyComponentName = CheckoutBodyComponentName;
         context.Model.AdditionalData["stablecoinsSwap"] = new JObject
         {
-            ["fromChain"] = handler.Chain.LifiChainId,
-            ["chainName"] = handler.Chain.Name,
+            ["fromChain"] = chain.LifiChainId,
+            ["chainName"] = chain.Name,
             ["btcAddress"] = address,
             ["integrator"] = string.IsNullOrWhiteSpace(config.Integrator) ? SwapDefaults.Integrator : config.Integrator,
             ["apiKey"] = config.ApiKey,
             ["fee"] = config.Fee,
             ["bufferPercent"] = config.BufferPercent,
             ["walletConnectProjectId"] = config.WalletConnectProjectId,
-            ["invoiceLabel"] = $"{context.Store.StoreName} invoice"
+            ["invoiceLabel"] = $"{context.Store.StoreName} invoice",
+            ["sourceUrl"] = sourceUrl
         };
     }
 }

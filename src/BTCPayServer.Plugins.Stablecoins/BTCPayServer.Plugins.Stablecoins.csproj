@@ -6,8 +6,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <Product>Stablecoins</Product>
-    <Description>Take payments from Ethereum, Base, Solana and other chains, settled as BTC or USDC into a wallet the merchant controls. Customers pay with any token through LI.FI, or USDC on Solana directly.</Description>
-    <Version>0.2.0</Version>
+    <Description>Let customers pay BTC invoices from Ethereum, Base, Solana, Tron, Litecoin, Dogecoin, Zcash and more. Tokens are swapped through LI.FI and native coins through THORChain, straight to the store's own BTC wallet.</Description>
+    <Version>0.3.0</Version>
   </PropertyGroup>
 
   <!-- Plugin development properties -->
