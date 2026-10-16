@@ -42,12 +42,17 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             FeePercent = any.Fee * 100m,
             BufferPercent = any.BufferPercent,
             WalletConnectProjectId = any.WalletConnectProjectId,
+            ThornodeUrl = any.ThornodeUrl,
+            ThorAffiliate = any.ThorAffiliate,
+            ThorAffiliateBps = any.ThorAffiliateBps,
+            ThorToleranceBps = any.ThorToleranceBps,
             Chains = configs.Select(c => new SwapChainViewModel
             {
                 Code = c.Chain.Code,
                 Name = c.Chain.Name,
                 PaymentMethodId = c.Chain.PaymentMethodId.ToString(),
                 Image = c.Chain.Image,
+                Provider = c.Chain.Provider,
                 Enabled = c.Config is not null && !excluded.Match(c.Chain.PaymentMethodId)
             }).ToList()
         });
@@ -64,10 +69,16 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             ApiKey = string.IsNullOrWhiteSpace(vm.ApiKey) ? null : vm.ApiKey.Trim(),
             Fee = vm.FeePercent / 100m,
             BufferPercent = vm.BufferPercent,
-            WalletConnectProjectId = string.IsNullOrWhiteSpace(vm.WalletConnectProjectId) ? null : vm.WalletConnectProjectId.Trim()
+            WalletConnectProjectId = string.IsNullOrWhiteSpace(vm.WalletConnectProjectId) ? null : vm.WalletConnectProjectId.Trim(),
+            ThornodeUrl = string.IsNullOrWhiteSpace(vm.ThornodeUrl) ? null : vm.ThornodeUrl.Trim(),
+            ThorAffiliate = string.IsNullOrWhiteSpace(vm.ThorAffiliate) ? null : vm.ThorAffiliate.Trim(),
+            ThorAffiliateBps = vm.ThorAffiliateBps,
+            ThorToleranceBps = vm.ThorToleranceBps
         };
         foreach (var (field, message) in SwapToBtcPaymentMethodHandler.Validate(config))
             ModelState.AddModelError(field == nameof(config.Fee) ? nameof(vm.FeePercent) : field, message);
+        if (string.IsNullOrEmpty(config.ThorAffiliate) && config.ThorAffiliateBps > 0)
+            ModelState.AddModelError(nameof(vm.ThorAffiliate), "Set the THORName that receives the affiliate fee, or set the fee to 0.");
         var enabled = vm.Chains.Where(c => c.Enabled).Select(c => SwapSourceChain.Find(c.Code)).OfType<SwapSourceChain>().ToHashSet();
         if (enabled.Count > 0 && !vm.HasBtcWallet)
             ModelState.AddModelError(string.Empty, "Set up the store's BTC on-chain wallet first: swapped BTC is paid into it.");
@@ -108,6 +119,7 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             Name = c.Name,
             PaymentMethodId = c.PaymentMethodId.ToString(),
             Image = c.Image,
+            Provider = c.Provider,
             Enabled = posted.GetValueOrDefault(c.Code)
         }).ToList();
     }
@@ -134,6 +146,20 @@ public class SwapSettingsViewModel
     [Display(Name = "WalletConnect project ID (optional)")]
     public string? WalletConnectProjectId { get; set; }
 
+    [Display(Name = "THORNode URL (optional)")]
+    public string? ThornodeUrl { get; set; }
+
+    [Display(Name = "THORChain affiliate THORName (optional)")]
+    public string? ThorAffiliate { get; set; }
+
+    [Display(Name = "THORChain affiliate fee (basis points)")]
+    [Range(0, 1000)]
+    public int ThorAffiliateBps { get; set; }
+
+    [Display(Name = "THORChain price tolerance (basis points)")]
+    [Range(10, 5000)]
+    public int ThorToleranceBps { get; set; } = SwapDefaults.ThorToleranceBps;
+
     public List<SwapChainViewModel> Chains { get; set; } = new();
 }
 
@@ -143,5 +169,6 @@ public class SwapChainViewModel
     public string Name { get; set; } = "";
     public string PaymentMethodId { get; set; } = "";
     public string Image { get; set; } = "";
+    public SwapProvider Provider { get; set; }
     public bool Enabled { get; set; }
 }

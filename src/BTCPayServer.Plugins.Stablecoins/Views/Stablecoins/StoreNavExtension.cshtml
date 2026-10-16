@@ -5,26 +5,13 @@
 @{
     var storeId = ScopeProvider.GetCurrentStoreId();
     ViewContext.RouteData.Values.TryGetValue("Controller", out var controller);
-    var controllerName = controller?.ToString() ?? "";
-    bool IsActive(string name) => !string.IsNullOrEmpty(storeId) && controllerName.Length > 0 &&
-                                  name.StartsWith(controllerName, StringComparison.InvariantCultureIgnoreCase);
-    var isActive = IsActive(nameof(UIUsdcStoreController));
-    var isSwapActive = IsActive(nameof(UISwapStoreController));
+    var isActive = !string.IsNullOrEmpty(storeId) && controller?.ToString() is { Length: > 0 } name &&
+                   nameof(UISwapStoreController).StartsWith(name, StringComparison.InvariantCultureIgnoreCase);
 }
 @if (!string.IsNullOrEmpty(storeId))
 {
     <li class="nav-item" permission="@Policies.CanModifyStoreSettings">
         <a class="nav-link @(isActive ? "active" : "")"
-           asp-area=""
-           asp-controller="UIUsdcStore"
-           asp-action="SolanaSettings"
-           asp-route-storeId="@storeId">
-            <img src="~/Resources/usdc.svg" alt="" width="18" height="18" class="me-2" />
-            <span>USDC (Solana)</span>
-        </a>
-    </li>
-    <li class="nav-item" permission="@Policies.CanModifyStoreSettings">
-        <a class="nav-link @(isSwapActive ? "active" : "")"
            asp-area=""
            asp-controller="UISwapStore"
            asp-action="SwapSettings"

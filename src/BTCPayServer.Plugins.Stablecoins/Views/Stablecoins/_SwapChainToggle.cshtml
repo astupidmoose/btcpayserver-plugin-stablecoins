@@ -1,0 +1,14 @@
+@using BTCPayServer.Plugins.Stablecoins.Controllers
+@model (SwapSettingsViewModel Settings, int Index)
+@{
+    var chain = Model.Settings.Chains[Model.Index];
+    var prefix = $"Chains[{Model.Index}]";
+}
+<div class="d-flex align-items-center mb-2">
+    <input type="hidden" name="@(prefix).Code" value="@chain.Code" />
+    <input type="checkbox" name="@(prefix).Enabled" id="Chain_@chain.Code" value="true" class="btcpay-toggle me-3" @(chain.Enabled ? "checked" : "") />
+    <input type="hidden" name="@(prefix).Enabled" value="false" />
+    <img src="~/@chain.Image" alt="" width="20" height="20" class="me-2" />
+    <label for="Chain_@chain.Code" class="form-check-label me-2">@chain.Name</label>
+    <code class="text-muted small">@chain.PaymentMethodId</code>
+</div>

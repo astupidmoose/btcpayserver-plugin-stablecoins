@@ -1,5 +1,6 @@
 @using BTCPayServer.Payments
 @using BTCPayServer.Plugins.Stablecoins.Swap
+@using BTCPayServer.Plugins.Stablecoins.Controllers
 @using BTCPayServer.Services
 @using BTCPayServer.Services.Invoices
 @inject DisplayFormatter DisplayFormatter
@@ -39,7 +40,13 @@
             @foreach (var p in payments)
             {
                 <tr>
-                    <td>@p.Chain.Name via LI.FI</td>
+                    <td>
+                        @p.Chain.Name via @(p.Chain.Provider == SwapProvider.Lifi ? "LI.FI" : "THORChain")
+                        @if (p.Data.SourceTxId is { } source)
+                        {
+                            <div class="small"><vc:truncate-center text="@source" link="@UISwapCheckoutController.ExplorerLink(p.Chain, source)" classes="truncate-center-id" /></div>
+                        }
+                    </td>
                     <td><vc:truncate-center text="@p.Data.Outpoint" link="@p.Link" classes="truncate-center-id" /></td>
                     <td>@p.Data.ConfirmationCount</td>
                     <td class="payment-value text-end text-nowrap">

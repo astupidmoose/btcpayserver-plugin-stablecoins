@@ -1,5 +1,6 @@
 @using BTCPayServer.Abstractions.Models
 @using BTCPayServer.Plugins.Stablecoins.Controllers
+@using BTCPayServer.Plugins.Stablecoins.Swap
 @model SwapSettingsViewModel
 @{
     ViewData.SetLayoutModel(new LayoutModel("STABLECOINS-SWAP", "Pay from other chains"));
@@ -17,9 +18,10 @@
     <div class="col-xl-8 col-xxl-constrain">
         <p class="text-secondary">
             Each chain below becomes its own payment method, so WooCommerce can list it as a separate option.
-            The customer pays with any token on that chain in their own wallet, and
-            <a href="https://li.fi" target="_blank" rel="noreferrer noopener">LI.FI</a> routes it through a bridge that pays native BTC
-            to a fresh address from this store's BTC wallet. Invoices are priced and settled in BTC, and BTCPay never holds the customer's tokens.
+            Invoices are priced and settled in BTC: the customer's coins are swapped to native BTC and paid to a fresh address
+            from this store's BTC wallet. BTCPay never holds the customer's coins.
+            In WooCommerce (BTCPay plugin, "Separate payment gateways"), each enabled chain shows up as its own gateway named by
+            the code next to it. Rename it there, for example to "Ethereum".
         </p>
         @if (!Model.HasBtcWallet)
         {
@@ -32,30 +34,23 @@
             <div asp-validation-summary="All" class="text-danger"></div>
         }
         <form method="post" asp-action="SwapSettings" asp-route-storeId="@storeId">
-            <h4 class="mt-4 mb-3">Chains customers can pay from</h4>
+            <h4 class="mt-4 mb-2">Tokens, through LI.FI</h4>
+            <p class="text-secondary">
+                The customer connects their wallet and pays with any token on the chain; <a href="https://li.fi" target="_blank" rel="noreferrer noopener">LI.FI</a>
+                routes it through a bridge that pays BTC.
+            </p>
             <div class="form-group">
                 @for (var i = 0; i < Model.Chains.Count; i++)
                 {
-                    <div class="d-flex align-items-center mb-2">
-                        <input type="hidden" asp-for="Chains[i].Code" />
-                        <input asp-for="Chains[i].Enabled" type="checkbox" class="btcpay-toggle me-3" />
-                        <img src="~/@Model.Chains[i].Image" alt="" width="20" height="20" class="me-2" />
-                        <label asp-for="Chains[i].Enabled" class="form-check-label me-2">@Model.Chains[i].Name</label>
-                        <code class="text-muted small">@Model.Chains[i].PaymentMethodId</code>
-                    </div>
+                    if (Model.Chains[i].Provider != SwapProvider.Lifi) continue;
+                    <partial name="/Views/Stablecoins/_SwapChainToggle.cshtml" model="(Model, i)" />
                 }
-                <div class="form-text">
-                    In WooCommerce (BTCPay plugin, "Separate payment gateways"), each enabled chain shows up as its own gateway, named by the code above.
-                    Rename it there, for example to "Ethereum".
-                </div>
             </div>
-
-            <h4 class="mt-4 mb-3">LI.FI</h4>
             <div class="form-group">
                 <label asp-for="Integrator" class="form-label"></label>
-                <input asp-for="Integrator" class="form-control" autocomplete="off" spellcheck="false" required maxlength="23" />
+                <input asp-for="Integrator" class="form-control" autocomplete="off" spellcheck="false" required maxlength="64" />
                 <span asp-validation-for="Integrator" class="text-danger"></span>
-                <div class="form-text">The integration name you registered at <a href="https://portal.li.fi" target="_blank" rel="noreferrer noopener">portal.li.fi</a>. Fees are only collected for registered names.</div>
+                <div class="form-text">The integration name from <a href="https://portal.li.fi" target="_blank" rel="noreferrer noopener">portal.li.fi</a>.</div>
             </div>
             <div class="form-group">
                 <label asp-for="ApiKey" class="form-label"></label>
@@ -63,27 +58,65 @@
                 <div class="form-text">Raises LI.FI's rate limits. It is visible in the checkout page's source, as LI.FI's widget requires.</div>
             </div>
             <div class="form-group">
-                <label asp-for="FeePercent" class="form-label"></label>
-                <input asp-for="FeePercent" type="number" min="0" max="9.99" step="0.01" class="form-control" />
-                <span asp-validation-for="FeePercent" class="text-danger"></span>
-                <div class="form-text">Added to the customer's swap and paid to your LI.FI fee wallet, minus LI.FI's share. 0 for none.</div>
-            </div>
-            <div class="form-group">
-                <label asp-for="BufferPercent" class="form-label"></label>
-                <input asp-for="BufferPercent" type="number" min="0" max="5" step="0.1" class="form-control" />
-                <span asp-validation-for="BufferPercent" class="text-danger"></span>
-                <div class="form-text">The panel asks LI.FI for this much more BTC than is due, so bridge rounding does not leave invoices partially paid. Overpayments show on the invoice as usual.</div>
-            </div>
-            <div class="form-group">
                 <label asp-for="WalletConnectProjectId" class="form-label"></label>
                 <input asp-for="WalletConnectProjectId" class="form-control font-monospace" autocomplete="off" spellcheck="false" />
                 <div class="form-text">From <a href="https://cloud.reown.com" target="_blank" rel="noreferrer noopener">Reown</a>. Lets customers connect mobile EVM wallets by QR code. Browser wallets work without it.</div>
             </div>
+            <div class="form-group">
+                <label asp-for="FeePercent" class="form-label"></label>
+                <input asp-for="FeePercent" type="number" min="0" max="9.99" step="0.01" class="form-control" />
+                <span asp-validation-for="FeePercent" class="text-danger"></span>
+                <div class="form-text">0 charges the customer nothing extra. Above 0, it is added to the swap and paid to your LI.FI fee wallets.</div>
+            </div>
+
+            <h4 class="mt-5 mb-2">Native coins, through THORChain</h4>
+            <p class="text-secondary">
+                The customer sends the coin from their own wallet to a <a href="https://thorchain.org" target="_blank" rel="noreferrer noopener">THORChain</a> vault with a memo that names
+                the invoice's BTC address. Their wallet must be able to add that memo.
+            </p>
+            <div class="form-group">
+                @for (var i = 0; i < Model.Chains.Count; i++)
+                {
+                    if (Model.Chains[i].Provider != SwapProvider.Thorchain) continue;
+                    <partial name="/Views/Stablecoins/_SwapChainToggle.cshtml" model="(Model, i)" />
+                }
+            </div>
+            <div class="form-group">
+                <label asp-for="ThornodeUrl" class="form-label"></label>
+                <input asp-for="ThornodeUrl" class="form-control font-monospace" autocomplete="off" spellcheck="false" placeholder="@BTCPayServer.Plugins.Stablecoins.Thorchain.ThornodeClient.DefaultUrl" />
+                <span asp-validation-for="ThornodeUrl" class="text-danger"></span>
+                <div class="form-text">Where BTCPay asks THORChain for quotes. Leave empty for the public gateway.</div>
+            </div>
+            <div class="form-group">
+                <label asp-for="ThorToleranceBps" class="form-label"></label>
+                <input asp-for="ThorToleranceBps" type="number" min="10" max="5000" step="1" class="form-control" />
+                <span asp-validation-for="ThorToleranceBps" class="text-danger"></span>
+                <div class="form-text">If the price moves more than this before the swap runs, THORChain refunds the customer instead. 300 = 3%.</div>
+            </div>
+            <div class="form-group">
+                <label asp-for="ThorAffiliate" class="form-label"></label>
+                <input asp-for="ThorAffiliate" class="form-control" autocomplete="off" spellcheck="false" maxlength="30" />
+                <span asp-validation-for="ThorAffiliate" class="text-danger"></span>
+            </div>
+            <div class="form-group">
+                <label asp-for="ThorAffiliateBps" class="form-label"></label>
+                <input asp-for="ThorAffiliateBps" type="number" min="0" max="1000" step="1" class="form-control" />
+                <span asp-validation-for="ThorAffiliateBps" class="text-danger"></span>
+                <div class="form-text">0 charges the customer nothing extra.</div>
+            </div>
+
+            <h4 class="mt-5 mb-2">Both</h4>
+            <div class="form-group">
+                <label asp-for="BufferPercent" class="form-label"></label>
+                <input asp-for="BufferPercent" type="number" min="0" max="5" step="0.1" class="form-control" />
+                <span asp-validation-for="BufferPercent" class="text-danger"></span>
+                <div class="form-text">Asks for this much more BTC than is due, paid by the customer. Leave at 0 and use the store's payment tolerance instead to absorb small shortfalls yourself.</div>
+            </div>
 
             <div class="alert alert-info" role="note">
-                Bridging to BTC usually takes several minutes and can take longer. Give invoices enough time
-                (Store settings, Checkout, "Invoice expires if the full amount has not been paid after", for example 60 minutes),
-                and consider a small payment tolerance for underpaid swaps.
+                Swaps to BTC usually take several minutes and can take longer. Give invoices enough time
+                (Store settings → Checkout → invoice expiry, for example 60 minutes), and set a payment tolerance of about 1%
+                (Store settings → Payment) so a swap that lands a few satoshis short still completes the order.
             </div>
 
             <button type="submit" class="btn btn-primary" id="Save">Save</button>

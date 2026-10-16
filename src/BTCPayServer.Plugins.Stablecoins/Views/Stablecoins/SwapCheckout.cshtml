@@ -1,7 +1,14 @@
+@using System.Collections.Generic
 @using BTCPayServer.Plugins.Stablecoins.Swap
 @model BTCPayServer.Models.InvoicingModels.CheckoutModel
 @{
-    var scriptUrl = Url.Content("~/Resources/js/swappanel.js") + "?v=" + typeof(StablecoinsPlugin).Assembly.GetName().Version;
+    var version = typeof(StablecoinsPlugin).Assembly.GetName().Version?.ToString();
+    var scriptUrls = new Dictionary<string, string>
+    {
+        ["evm"] = Url.Content("~/Resources/js/swappanel-evm.js") + "?v=" + version,
+        ["solana"] = Url.Content("~/Resources/js/swappanel-solana.js") + "?v=" + version,
+        ["tron"] = Url.Content("~/Resources/js/swappanel-tron.js") + "?v=" + version
+    };
 }
 
 <template id="@SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName">
@@ -27,6 +34,61 @@
     </div>
 </template>
 
+
+<template id="@SwapToBtcCheckoutModelExtension.ThorCheckoutBodyComponentName">
+    <div class="payment-box stablecoins-thor" v-if="thor">
+        <p class="text-center text-muted mb-3">
+            Send {{ thor.ticker }} from your own wallet. THORChain swaps it to BTC and pays this invoice.
+        </p>
+        <p v-if="!deposit && !error" class="text-center text-muted my-4">Getting a THORChain quote…</p>
+        <div v-if="error" class="alert alert-danger" role="alert">
+            {{ error }}
+            <button type="button" class="btn btn-link p-0 ms-1 align-baseline" v-on:click="refresh(true)">Try again</button>
+        </div>
+        <template v-if="deposit">
+            <div class="qr-container clipboard-button" :data-clipboard="deposit.inboundAddress">
+                <div><qrcode :value="deposit.paymentUri" tag="div" :options="qrOptions" /></div>
+                <img class="qr-icon" :src="model.cryptoImage" :alt="thor.chainName" />
+            </div>
+            <dl class="mt-3 mb-0">
+                <div class="d-flex justify-content-between align-items-center gap-2">
+                    <dt>Send exactly</dt>
+                    <dd class="clipboard-button clipboard-button-hover fw-semibold mb-0" :data-clipboard="deposit.amount" data-clipboard-hover="start">{{ deposit.amount }} {{ deposit.ticker }}</dd>
+                </div>
+            </dl>
+            <div class="input-group mt-3">
+                <div class="form-floating" id="ThorVault_@Model.PaymentMethodId">
+                    <vc:truncate-center text="deposit.inboundAddress" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
+                    <label>To this THORChain vault</label>
+                </div>
+            </div>
+            <div class="input-group mt-3">
+                <div class="form-floating" id="ThorMemo_@Model.PaymentMethodId">
+                    <vc:truncate-center text="deposit.memo" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
+                    <label>With this memo ({{ deposit.memoField }})</label>
+                </div>
+            </div>
+            <div class="alert alert-warning mt-3 mb-0 small" role="note">
+                Your wallet must include the memo. Without it, or if you send from an exchange, THORChain cannot match the swap
+                and refunds the coins to the sending address, minus network fees.
+            </div>
+            <p class="text-center text-muted small mt-3 mb-0">
+                Quote valid for {{ minutesLeft }} more min<span v-if="deposit.totalSwapSeconds">; BTC usually arrives about {{ Math.ceil(deposit.totalSwapSeconds / 60) }} min after you send</span>.
+            </p>
+            <p v-if="deposit.warning" class="text-center text-muted small mt-1 mb-0">{{ deposit.warning }}</p>
+        </template>
+        <form class="mt-3" v-on:submit.prevent="sendTxId" v-if="!txSaved">
+            <label class="form-label small text-muted" for="ThorTxId_@Model.PaymentMethodId">Already sent? Paste your {{ thor.ticker }} transaction ID so the store can follow the swap.</label>
+            <div class="input-group input-group-sm">
+                <input id="ThorTxId_@Model.PaymentMethodId" v-model.trim="txId" class="form-control font-monospace" autocomplete="off" spellcheck="false" />
+                <button type="submit" class="btn btn-secondary" :disabled="!txId">Save</button>
+            </div>
+            <div v-if="txError" class="text-danger small mt-1">{{ txError }}</div>
+        </form>
+        <p v-else class="text-center text-muted small mt-3 mb-0">Transaction saved. The invoice updates by itself when the BTC arrives.</p>
+    </div>
+</template>
+
 <style>
     .stablecoins-swap-panel { min-height: 3rem; margin: 0 -.5rem; }
     .stablecoins-swap-panel > div { max-width: 100%; }
@@ -34,21 +96,26 @@
 
 <script>
     (function () {
-        const scriptUrl = @Safe.Json(scriptUrl);
-        let loading = null;
-        function loadPanel() {
-            if (window.StablecoinsSwapPanel) return Promise.resolve(window.StablecoinsSwapPanel);
-            if (!loading) {
-                loading = new Promise((resolve, reject) => {
+        const scriptUrls = @Safe.Json(scriptUrls);
+        const loading = {};
+        // Each wallet family (EVM, Solana, Tron) is its own bundle; load only the one this chain needs.
+        function familyOf(chainId) {
+            return chainId === @SwapSourceChain.SolanaLifiChainId ? 'solana' : chainId === @SwapSourceChain.TronLifiChainId ? 'tron' : 'evm';
+        }
+        function loadPanel(family) {
+            const ready = () => window.StablecoinsSwapPanels && window.StablecoinsSwapPanels[family];
+            if (ready()) return Promise.resolve(ready());
+            if (!loading[family]) {
+                loading[family] = new Promise((resolve, reject) => {
                     const s = document.createElement('script');
-                    s.src = scriptUrl;
+                    s.src = scriptUrls[family];
                     s.async = true;
-                    s.onload = () => window.StablecoinsSwapPanel ? resolve(window.StablecoinsSwapPanel) : reject(new Error('panel script did not initialise'));
-                    s.onerror = () => { loading = null; reject(new Error('could not download the panel script')); };
+                    s.onload = () => ready() ? resolve(ready()) : reject(new Error('panel script did not initialise'));
+                    s.onerror = () => { delete loading[family]; reject(new Error('could not download the panel script')); };
                     document.head.appendChild(s);
                 });
             }
-            return loading;
+            return loading[family];
         }
         // Ask LI.FI for slightly more than is due, rounded up to the satoshi, so bridge rounding never leaves the invoice partially paid.
         function btcToRequest(due, bufferPercent) {
@@ -56,6 +123,13 @@
             if (!(value > 0)) return null;
             const sats = Math.ceil(value * 1e8 * (1 + (Number(bufferPercent) || 0) / 100));
             return (sats / 1e8).toFixed(8);
+        }
+        function reportSource(url, txHash, chainId) {
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ txHash, chainId })
+            }).then(r => r.ok);
         }
         function appearance() {
             const theme = document.documentElement.getAttribute('data-btcpay-theme');
@@ -66,7 +140,7 @@
             props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
             template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName),
             data () {
-                return { state: 'loading', error: null, mountedDue: null, mountedAddress: null };
+                return { state: 'loading', error: null, mountedDue: null, mountedAddress: null, panel: null };
             },
             computed: {
                 swap () { return this.model.stablecoinsSwap; }
@@ -78,7 +152,7 @@
             },
             mounted () { this.render(); },
             beforeDestroy () {
-                if (window.StablecoinsSwapPanel && this.$refs.panel) window.StablecoinsSwapPanel.unmount(this.$refs.panel);
+                if (this.panel && this.$refs.panel) this.panel.unmount(this.$refs.panel);
             },
             methods: {
                 async render () {
@@ -87,7 +161,8 @@
                     if (!swap || !btcDue) { this.state = 'idle'; return; }
                     if (this.mountedDue === btcDue && this.mountedAddress === swap.btcAddress) return;
                     try {
-                        const panel = await loadPanel();
+                        const panel = await loadPanel(familyOf(Number(swap.fromChain)));
+                        this.panel = panel;
                         this.mountedDue = btcDue;
                         this.mountedAddress = swap.btcAddress;
                         panel.mount(this.$refs.panel, {
@@ -101,8 +176,9 @@
                             invoiceLabel: swap.invoiceLabel,
                             appearance: appearance(),
                             primaryColor: getComputedStyle(document.documentElement).getPropertyValue('--btcpay-primary').trim() || undefined,
-                            onEvent: (kind) => {
-                                if (kind === 'started') this.state = 'started';
+                            onEvent: (kind, data) => {
+                                if (kind === 'tx' && data && data.txHash) reportSource(swap.sourceUrl, data.txHash, data.chainId).catch(() => {});
+                                else if (kind === 'started') this.state = 'started';
                                 else if (kind === 'failed') this.state = 'failed';
                             }
                         });
@@ -110,6 +186,60 @@
                     } catch (e) {
                         this.state = 'error';
                         this.error = e && e.message ? e.message : String(e);
+                    }
+                }
+            }
+        });
+
+        Vue.component(@Safe.Json(SwapToBtcCheckoutModelExtension.ThorCheckoutBodyComponentName), {
+            props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
+            template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.ThorCheckoutBodyComponentName),
+            components: { qrcode: VueQrcode },
+            data () {
+                return { deposit: null, error: null, now: Date.now(), timer: null, fetchedDue: null, txId: '', txSaved: false, txError: null };
+            },
+            computed: {
+                thor () { return this.model.stablecoinsThor; },
+                minutesLeft () {
+                    return this.deposit ? Math.max(0, Math.floor((this.deposit.expiry * 1000 - this.now) / 60000)) : 0;
+                }
+            },
+            watch: {
+                // A partial payment changes what is due; get a new quote for the rest.
+                'model.due' () { this.refresh(false); }
+            },
+            mounted () {
+                this.refresh(true);
+                this.timer = setInterval(() => {
+                    this.now = Date.now();
+                    // Vaults rotate: never show a deposit address past its quote's expiry.
+                    if (this.deposit && this.deposit.expiry * 1000 - this.now < 60000) this.refresh(true);
+                }, 15000);
+            },
+            beforeDestroy () { clearInterval(this.timer); },
+            methods: {
+                async sendTxId () {
+                    this.txError = null;
+                    try {
+                        if (await reportSource(this.thor.sourceUrl, this.txId)) this.txSaved = true;
+                        else this.txError = 'That does not look like a transaction ID.';
+                    } catch (e) {
+                        this.txError = 'Could not save it. Please try again.';
+                    }
+                },
+                async refresh (force) {
+                    if (!this.thor || (!force && this.fetchedDue === this.model.due)) return;
+                    this.fetchedDue = this.model.due;
+                    try {
+                        const response = await fetch(this.thor.depositUrl, { headers: { Accept: 'application/json' } });
+                        const data = await response.json();
+                        if (data.error) { this.error = data.error; this.deposit = null; return; }
+                        this.error = null;
+                        this.deposit = data;
+                        this.now = Date.now();
+                    } catch (e) {
+                        this.error = 'The THORChain quote could not be loaded.';
+                        this.deposit = null;
                     }
                 }
             }

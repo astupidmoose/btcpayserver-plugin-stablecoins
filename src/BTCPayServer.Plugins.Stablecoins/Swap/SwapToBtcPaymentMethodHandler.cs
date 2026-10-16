@@ -89,7 +89,8 @@ public class SwapToBtcPaymentMethodHandler(
             AccountDerivation = prepare.AccountDerivation.ToString(),
             KeyPath = reserved.KeyPath?.ToString(),
             KeyIndex = reserved.Index ?? (int)(reserved.KeyPath?.Indexes.Last() ?? 0),
-            FromChainId = chain.LifiChainId
+            FromChainId = chain.LifiChainId,
+            ThorAsset = chain.ThorAsset
         }, Serializer);
     }
 
@@ -135,13 +136,23 @@ public class SwapToBtcPaymentMethodHandler(
 
     public static IEnumerable<(string Field, string Message)> Validate(SwapToBtcPaymentMethodConfig config)
     {
-        if (string.IsNullOrWhiteSpace(config.Integrator) || config.Integrator.Length > 23 ||
+        if (string.IsNullOrWhiteSpace(config.Integrator) || config.Integrator.Length > 64 ||
             !config.Integrator.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.'))
-            yield return (nameof(config.Integrator), "Use 1 to 23 letters, digits, dashes, dots or underscores.");
+            yield return (nameof(config.Integrator), "Use 1 to 64 letters, digits, dashes, dots or underscores.");
         if (config.Fee is < 0m or >= 0.1m)
             yield return (nameof(config.Fee), "The fee must be at least 0 and below 10%.");
         if (config.BufferPercent is < 0m or > 5m)
             yield return (nameof(config.BufferPercent), "The buffer must be between 0% and 5%.");
+        if (!string.IsNullOrEmpty(config.ThornodeUrl) &&
+            !(Uri.TryCreate(config.ThornodeUrl, UriKind.Absolute, out var url) && url.Scheme == Uri.UriSchemeHttps))
+            yield return (nameof(config.ThornodeUrl), "Enter an https:// THORNode URL, or leave it empty for the default.");
+        if (!string.IsNullOrEmpty(config.ThorAffiliate) &&
+            (config.ThorAffiliate.Length > 30 || !config.ThorAffiliate.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '+')))
+            yield return (nameof(config.ThorAffiliate), "A THORName is up to 30 letters, digits, '-', '_' or '+'.");
+        if (config.ThorAffiliateBps is < 0 or > 1000)
+            yield return (nameof(config.ThorAffiliateBps), "The THORChain affiliate fee must be between 0 and 1000 basis points.");
+        if (config.ThorToleranceBps is < 10 or > 5000)
+            yield return (nameof(config.ThorToleranceBps), "The price tolerance must be between 10 and 5000 basis points.");
     }
 
     public SwapToBtcPromptDetails ParsePaymentPromptDetails(JToken details) =>
