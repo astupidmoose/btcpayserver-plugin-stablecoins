@@ -47,7 +47,8 @@ For support, the invoice log records each LI.FI transaction the customer signs (
 ## Settings (per store)
 
 - Which chains are enabled, and USDC/USDT from an exchange.
-- LI.FI: integrator name (from [portal.li.fi](https://portal.li.fi)), optional API key, optional WalletConnect project id for mobile EVM wallets, integrator fee (default 0).
+- LI.FI: integrator name (from [portal.li.fi](https://portal.li.fi)), optional API key, integrator fee (default 0).
+- WalletConnect project ID (optional): lets customers connect a mobile EVM wallet by scanning a QR code; browser wallets work without it. To get one, sign up free at [Reown](https://cloud.reown.com) (formerly WalletConnect Cloud), create a project, copy its Project ID into this field, and add your BTCPay domain (for example `btcpay.example.com`) to the project's allowed domains.
 - NEAR Intents: 1Click API key, refund addresses (EVM, Solana, Tron), price tolerance (default 50 bps).
 - Amount buffer: extra BTC asked from the customer (default 0). Leave it at 0 and set the store's payment tolerance to about 1% to absorb small shortfalls yourself.
 
