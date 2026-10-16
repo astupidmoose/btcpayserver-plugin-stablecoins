@@ -83,7 +83,7 @@ public record SwapSourceChain
         new() { Code = code, Name = name, Provider = SwapProvider.Thorchain, ThorAsset = asset, Ticker = ticker, Decimals = decimals, UriScheme = uriScheme, CoinImage = image, EvmChainId = evmChainId };
 
     static SwapSourceChain Intents(string symbol, params IntentsNetwork[] networks) =>
-        new() { Code = symbol, Name = symbol, Provider = SwapProvider.Intents, Ticker = symbol, Networks = networks, Decimals = 6 };
+        new() { Code = symbol, Name = $"{symbol} from exchange", Provider = SwapProvider.Intents, Ticker = symbol, Networks = networks, Decimals = 6 };
 
     static readonly IntentsNetwork Eth = new("eth", "Ethereum", AddressFamily.Evm, "Resources/chains/ethereum.svg");
     static readonly IntentsNetwork Base = new("base", "Base", AddressFamily.Evm, "Resources/chains/base.svg");

@@ -143,4 +143,19 @@ public class SwapToBtcTests
         Assert.StartsWith("https://scan.li.fi/tx/", UISwapCheckoutController.ExplorerLink(SwapSourceChain.Find("BASE")!, "0xabc"));
         Assert.StartsWith("https://runescan.io/tx/", UISwapCheckoutController.ExplorerLink(SwapSourceChain.Find("LITECOIN")!, "abc"));
     }
+
+    [Fact]
+    public void ExchangeOptionsComeLastOnTheCheckout()
+    {
+        var ids = new[] { "BTC-CHAIN", "NEAR_USDC", "THOR_LITECOIN", "NEAR_USDT", "LIFI_ETHEREUM", "XMR-CHAIN" };
+        var methods = ids.Select(id => new BTCPayServer.Models.InvoicingModels.CheckoutModel.AvailablePaymentMethod
+        {
+            PaymentMethodId = BTCPayServer.Payments.PaymentMethodId.Parse(id),
+            PaymentMethodName = id
+        }).ToList();
+        Assert.Equal(
+            new[] { "BTC-CHAIN", "THOR_LITECOIN", "LIFI_ETHEREUM", "XMR-CHAIN", "NEAR_USDC", "NEAR_USDT" },
+            SwapCheckoutOrdering.Reorder(methods).Select(m => m.PaymentMethodName));
+        Assert.Equal("USDC from exchange", SwapSourceChain.Find(BTCPayServer.Payments.PaymentMethodId.Parse("NEAR_USDC"))!.Name);
+    }
 }
