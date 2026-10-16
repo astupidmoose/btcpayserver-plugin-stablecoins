@@ -29,6 +29,27 @@ public class SwapToBtcPaymentMethodConfig
     public int ThorAffiliateBps { get; set; }
     /// <summary>Maximum price movement THORChain accepts before refunding the swap, in basis points.</summary>
     public int ThorToleranceBps { get; set; } = SwapDefaults.ThorToleranceBps;
+
+    /// <summary>NEAR Intents 1Click API key (a JWT). Stays on the server.</summary>
+    public string? IntentsApiKey { get; set; }
+    /// <summary>1Click endpoint; not on the settings page, the default is NEAR Intents' own.</summary>
+    public string? IntentsUrl { get; set; }
+    /// <summary>
+    /// Where NEAR Intents returns a stablecoin payment it could not swap (too little sent, sent too late), and any excess.
+    /// One per address family; a network is offered only when its family has one.
+    /// </summary>
+    public string? RefundEvm { get; set; }
+    public string? RefundSolana { get; set; }
+    public string? RefundTron { get; set; }
+    /// <summary>Price movement allowed on stablecoin swaps, in basis points. The amount shown includes it; any unused part is refunded.</summary>
+    public int IntentsSlippageBps { get; set; } = SwapDefaults.IntentsSlippageBps;
+
+    public string? RefundAddress(AddressFamily family) => family switch
+    {
+        AddressFamily.Evm => RefundEvm,
+        AddressFamily.Solana => RefundSolana,
+        _ => RefundTron
+    };
 }
 
 public static class SwapDefaults
@@ -36,6 +57,7 @@ public static class SwapDefaults
     public const string Integrator = "btcpay-stablecoins";
     public const decimal BufferPercent = 0m;
     public const int ThorToleranceBps = 300;
+    public const int IntentsSlippageBps = 50;
 }
 
 /// <summary>

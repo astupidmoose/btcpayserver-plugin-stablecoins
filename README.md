@@ -8,6 +8,7 @@ Each source chain is its own BTCPay payment method, so the WooCommerce BTCPay pl
 |---|---|---|
 | **LI.FI** (tokens) | Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Solana, Tron | Connects their wallet in the [LI.FI](https://li.fi) panel, picks any token, signs once. A bridge delivers BTC. |
 | **THORChain** (native coins) | Litecoin, Dogecoin, Zcash (transparent), Cosmos Hub (ATOM), XRP, and the native coin of Ethereum (ETH), Base (ETH), BNB Chain (BNB), Avalanche (AVAX), Solana (SOL) and Tron (TRX). Tokens on those chains go through LI.FI. | Sends an exact amount of the coin to a [THORChain](https://thorchain.org) vault, with no memo. THORChain's memoless deposits recognise the payment by its amount and swap it to BTC for the invoice. |
+| **NEAR Intents** (USDC, USDT from any wallet or exchange) | USDC on Ethereum, Base, Arbitrum, Polygon, Solana, BNB Smart Chain, Avalanche, Optimism; USDT on Ethereum, Tron, BNB Smart Chain, Solana, Polygon, Arbitrum, Avalanche | Picks the network, then sends an exact amount to a one-time deposit address from the [1Click API](https://github.com/defuse-protocol/one-click-sdk-typescript) (an exact-output quote for the BTC due, to the invoice's address). Works from exchange withdrawals. NEAR Intents holds the deposit until its solvers swap it; anything it cannot swap, and any excess, goes to the store's refund address for that network. Needs a 1Click API key. |
 
 Bitcoin Cash is deliberately not offered. Monero is not offered by THORChain's memoless API yet.
 

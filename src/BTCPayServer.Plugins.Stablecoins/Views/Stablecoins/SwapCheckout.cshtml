@@ -44,6 +44,50 @@
     </div>
 </template>
 
+<template id="@SwapToBtcCheckoutModelExtension.DepositCheckoutBodyComponentName">
+    <div>
+        <stablecoins-network-picker :model="model"></stablecoins-network-picker>
+        <component :is="'@SwapToBtcCheckoutModelExtension.BitcoinCheckoutBodyComponentName'" :model="model"></component>
+    </div>
+</template>
+
+<template id="stablecoins-network-picker">
+    <div class="stablecoins-network mb-3" v-if="d.state !== 'done'">
+        <div class="form-group mb-3" v-if="d.state !== 'received'">
+            <label class="form-label" for="StablecoinsNetwork">Network</label>
+            <select id="StablecoinsNetwork" class="form-select" :value="d.network || ''" :disabled="busy || d.state === 'incomplete'" v-on:change="choose($event.target.value)">
+                <option value="" disabled>Choose the network you send from</option>
+                <option v-for="n in d.networks" :key="n.code" :value="n.code">{{ n.name }}</option>
+            </select>
+        </div>
+        <p v-if="d.state === 'choosenetwork'" class="text-muted small text-center mb-0">
+            Paying from an exchange? Pick the same network in its withdrawal form.
+        </p>
+        <div v-else-if="d.state === 'preparing' || busy" class="text-center">
+            <span class="spinner-border spinner-border-sm text-muted" role="status"></span>
+            <p class="text-muted mt-2 mb-0">Getting your {{ d.symbol }} payment address…</p>
+        </div>
+        <div v-else-if="d.state === 'ready'" class="alert alert-warning small mb-0" role="note">
+            Send only {{ d.symbol }} on {{ d.networkName }} to this address, and send the full amount.
+            If your exchange takes its withdrawal fee out of the amount, add the fee.
+            <span v-if="d.memo"><br>Memo: <strong>{{ d.memo }}</strong></span>
+        </div>
+        <div v-else-if="d.state === 'incomplete'" class="alert alert-warning small mb-0" role="alert">
+            Part of the payment arrived. Send the remaining <strong>{{ d.remaining }} {{ d.symbol }}</strong> to the same address on {{ d.networkName }}.
+        </div>
+        <div v-else-if="d.state === 'received'" class="text-center">
+            <p class="fw-semibold mb-1">{{ d.symbol }} payment received</p>
+            <p class="text-muted small mb-0">
+                Keep this page open. It updates by itself once the payment is confirmed<span v-if="d.minutes">, usually within {{ d.minutes }} minutes</span>.
+            </p>
+        </div>
+        <div v-else-if="d.state === 'refunded'" class="alert alert-danger small mb-0" role="alert">
+            This payment could not be completed. Please contact the store about a refund.
+        </div>
+        <div v-else-if="d.state === 'failed' || error" class="alert alert-warning small mb-0" role="alert">{{ error || d.error }}</div>
+    </div>
+</template>
+
 <style>
     .stablecoins-swap-panel { min-height: 3rem; }
     .stablecoins-tokens { max-height: 16rem; overflow-y: auto; }
@@ -148,6 +192,49 @@
                     } catch (e) {
                         this.state = 'error';
                         this.error = e && e.message ? e.message : String(e);
+                    }
+                }
+            }
+        });
+
+        Vue.component(@Safe.Json(SwapToBtcCheckoutModelExtension.DepositCheckoutBodyComponentName), {
+            props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
+            template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.DepositCheckoutBodyComponentName)
+        });
+
+        Vue.component('stablecoins-network-picker', {
+            props: ['model'],
+            template: '#stablecoins-network-picker',
+            data () { return { busy: false, error: null, timer: null }; },
+            computed: {
+                d () { return this.model.stablecoinsDeposit; }
+            },
+            // The address is prepared and the deposit followed in the background; ask for the updated invoice while needed.
+            mounted () {
+                this.timer = setInterval(() => {
+                    const state = this.d && this.d.state;
+                    if (state && state !== 'done' && state !== 'choosenetwork' && this.$root && this.$root.fetchData)
+                        this.$root.fetchData();
+                }, 5000);
+            },
+            beforeDestroy () { clearInterval(this.timer); },
+            methods: {
+                async choose (network) {
+                    if (!network) return;
+                    this.busy = true;
+                    this.error = null;
+                    try {
+                        const r = await fetch(this.d.selectUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                            body: JSON.stringify({ network })
+                        });
+                        if (!r.ok) this.error = 'That network is not available right now. Please choose another one.';
+                        if (this.$root && this.$root.fetchData) await this.$root.fetchData();
+                    } catch (e) {
+                        this.error = 'Could not reach the store. Please try again.';
+                    } finally {
+                        this.busy = false;
                     }
                 }
             }

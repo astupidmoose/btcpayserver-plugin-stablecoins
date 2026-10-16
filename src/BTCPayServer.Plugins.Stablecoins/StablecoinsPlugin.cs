@@ -17,7 +17,8 @@ namespace BTCPayServer.Plugins.Stablecoins;
 /// <summary>
 /// Pay a BTC invoice from another chain: one payment method per source chain, each paying a fresh
 /// address from the store's own BTC wallet. Tokens on EVM chains, Solana and Tron go through LI.FI;
-/// native coins (Litecoin, Dogecoin, Zcash, Cosmos, XRP) go through THORChain.
+/// native coins go through THORChain;
+/// USDC and USDT from any wallet or exchange go through NEAR Intents deposit addresses.
 /// </summary>
 public class StablecoinsPlugin : BaseBTCPayServerPlugin
 {
@@ -41,6 +42,10 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
         services.AddSingleton(provider => new MemolessClient(
             provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(MemolessClient.HttpClientName)));
         services.AddSingleton<ThorDepositService>();
+        services.AddHttpClient(Intents.OneClickClient.HttpClientName);
+        services.AddSingleton(provider => new Intents.OneClickClient(
+            provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(Intents.OneClickClient.HttpClientName)));
+        services.AddSingleton<Intents.IntentsDepositService>();
 
         var btcTxLink = networkType == ChainName.Mainnet ? "https://mempool.space/tx/{0}" : "https://mempool.space/testnet/tx/{0}";
         foreach (var source in SwapSourceChain.All)

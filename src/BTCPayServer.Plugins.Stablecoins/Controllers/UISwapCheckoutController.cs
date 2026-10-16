@@ -27,6 +27,9 @@ namespace BTCPayServer.Plugins.Stablecoins.Controllers;
 [Route("plugins/stablecoins")]
 public class UISwapCheckoutController(
     InvoiceRepository invoiceRepository,
+    StoreRepository storeRepository,
+    PaymentMethodHandlerDictionary handlers,
+    Intents.IntentsDepositService intents,
     ILogger<UISwapCheckoutController> logger) : Controller
 {
     // Keeps one invoice from filling its log: a handful of source transactions and quotes is plenty.
@@ -56,6 +59,28 @@ public class UISwapCheckoutController(
             return NotFound();
         await Note(invoiceId, $"tx:{txHash}",
             $"Customer's {chain.Name} transaction for this swap: {txHash}. Track it at {ExplorerLink(chain, txHash!)}");
+        return Json(new { ok = true });
+    }
+
+    public class NetworkChoice
+    {
+        public string? Network { get; set; }
+    }
+
+    /// <summary>The USDC or USDT checkout's network picker. The deposit address for that network is prepared in the background.</summary>
+    [HttpPost("deposits/{invoiceId}/{paymentMethodId}/network")]
+    public async Task<IActionResult> Network(string invoiceId, string paymentMethodId, [FromBody] NetworkChoice body)
+    {
+        if (!PaymentMethodId.TryParse(paymentMethodId, out var pmi) || SwapSourceChain.Find(pmi) is not { Provider: SwapProvider.Intents } chain)
+            return NotFound();
+        var invoice = await invoiceRepository.GetInvoice(invoiceId);
+        if (invoice is null || invoice.Status != InvoiceStatus.New || invoice.GetPaymentPrompt(pmi) is not { Activated: true })
+            return NotFound();
+        var store = await storeRepository.FindStore(invoice.StoreId);
+        var config = store?.GetPaymentMethodConfig<SwapToBtcPaymentMethodConfig>(pmi, handlers);
+        if (config is null || body?.Network is not { } network || !intents.Select(chain, config, invoiceId, network))
+            return BadRequest(new { error = "That network is not available for this payment." });
+        await Note(invoiceId, $"network:{network}", $"Customer chose to pay {chain.Name} on {chain.Networks.First(n => n.Code == network).Name}.");
         return Json(new { ok = true });
     }
 
