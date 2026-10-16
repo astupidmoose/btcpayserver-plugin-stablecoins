@@ -57,6 +57,7 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
             services.AddDefaultPrettyName(source.PaymentMethodId, source.Name);
             services.AddTransactionLinkProvider(source.PaymentMethodId, new DefaultTransactionLinkProvider(btcTxLink));
         }
+        services.AddSingleton<IGlobalCheckoutModelExtension, SwapCheckoutOrdering>();
         services.AddStartupTask<LegacyIdMigration>();
         services.AddSingleton<SwapToBtcListener>();
         services.AddHostedService(p => p.GetRequiredService<SwapToBtcListener>());
