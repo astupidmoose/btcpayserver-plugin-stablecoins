@@ -215,7 +215,7 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
             logger.LogWarning(ex, "Could not prepare a {Coin} payment on {Network} for {Address}", chain.Ticker, networkCode, btcAddress);
             lock (entry)
             {
-                entry.Error = "This network is unavailable right now. Please try again shortly or choose another network.";
+                entry.Error = "This payment option is unavailable right now. Please try again shortly or pay from a wallet instead.";
                 entry.ErrorAt = Now();
             }
         }

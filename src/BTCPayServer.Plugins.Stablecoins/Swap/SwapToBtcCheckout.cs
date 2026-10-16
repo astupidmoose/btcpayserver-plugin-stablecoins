@@ -70,7 +70,7 @@ public class SwapToBtcCheckoutModelExtension(
         }
 
         // Token checkouts also offer "Send USDC from an exchange": a deposit address paid into this checkout's BTC address.
-        var options = config.EnabledExchangeOptions().ToList();
+        var options = config.ExchangeOptionsFor(handler.Chain).ToList();
         var chosen = intents.Chosen(context.InvoiceEntity.Id) is { } c && options.Contains(c) ? c : null;
         if (chosen is not null)
             ModifyForDeposit(context, config, chosen, address, accounting);
@@ -164,11 +164,13 @@ public class SwapToBtcCheckoutModelExtension(
             model.OrderAmountFiat = null;
         }
 
-        var networks = IntentsDepositService.Networks(chain, config).ToList();
+        // Always the network of the checkout the customer is on: Base checkout, USDC on Base.
+        var networks = IntentsDepositService.Networks(chain, config).Where(n => n.Code == handler.Chain.IntentsNetworkCode).ToList();
         var data = new JObject
         {
             ["symbol"] = chain.Ticker,
             ["networks"] = new JArray(networks.Select(n => new JObject { ["code"] = n.Code, ["name"] = n.Name })),
+            ["fixed"] = true,
             ["selectUrl"] = context.UrlHelper.Content($"~/plugins/stablecoins/deposits/{invoice.Id}/{handler.PaymentMethodId}/{chain.Code}/network")
         };
         model.AdditionalData["stablecoinsDeposit"] = data;
@@ -179,9 +181,12 @@ public class SwapToBtcCheckoutModelExtension(
         }
 
         var status = intents.Get(chain, config, invoice.Id, btcAddress, accounting.Due, invoice.ExpirationTime);
+        // Came from another token checkout (Ethereum, then Base): switch to this one's network, unless a deposit is on its way.
+        if (networks.Count == 1 && status.Network != networks[0].Code && intents.Select(chain, config, invoice.Id, networks[0].Code))
+            status = intents.Get(chain, config, invoice.Id, btcAddress, accounting.Due, invoice.ExpirationTime);
         data["state"] = status.State.ToString().ToLowerInvariant();
         data["network"] = status.Network;
-        data["networkName"] = networks.FirstOrDefault(n => n.Code == status.Network)?.Name;
+        data["networkName"] = chain.Networks.FirstOrDefault(n => n.Code == status.Network)?.Name;
         data["error"] = status.Error;
         if (status.Payment is not { } payment)
             return;

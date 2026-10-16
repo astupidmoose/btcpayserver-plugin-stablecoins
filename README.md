@@ -90,3 +90,10 @@ Upload the resulting `.btcpay` file under Server Settings → Plugins → Upload
 - Monero, when THORChain's memoless API lists it.
 - Settle into USDC instead of BTC.
 - Publish on the Plugin Builder.
+
+## WooCommerce gateway titles
+
+In separate gateways mode, the BTCPay for WooCommerce plugin titles each gateway with its payment method id
+(LIFI_BASE), since BTCPay's API has no display name. Copy `woocommerce/btcpay-stablecoins-gateway-titles.php`
+to `wp-content/mu-plugins/` to give them readable titles ("Base Network", "Solana", "Litecoin"...). It only
+replaces a title that is still the id, so titles you set in WooCommerce > Settings > Payments stay.

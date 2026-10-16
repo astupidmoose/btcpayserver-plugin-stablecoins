@@ -77,17 +77,19 @@ public class UISwapCheckoutController(
     [HttpPost("deposits/{invoiceId}/{paymentMethodId}/option")]
     public async Task<IActionResult> Option(string invoiceId, string paymentMethodId, [FromBody] OptionChoice body)
     {
-        if (await TokenCheckout(invoiceId, paymentMethodId) is not { } config)
+        if (await TokenCheckout(invoiceId, paymentMethodId) is not var (tokens, config))
             return NotFound();
         if (body?.Option is not { } code)
         {
             intents.Choose(invoiceId, null);
             return Json(new { ok = true });
         }
-        if (config.EnabledExchangeOptions().FirstOrDefault(o => o.Code.Equals(code, StringComparison.OrdinalIgnoreCase)) is not { } option)
+        if (config.ExchangeOptionsFor(tokens).FirstOrDefault(o => o.Code.Equals(code, StringComparison.OrdinalIgnoreCase)) is not { } option ||
+            !intents.Select(option, config, invoiceId, tokens.IntentsNetworkCode!))
             return BadRequest(new { error = "That option is not available for this payment." });
         intents.Choose(invoiceId, option);
-        await Note(invoiceId, $"option:{option.Code}", $"Customer chose to send {option.Ticker} from an exchange (NEAR Intents).");
+        await Note(invoiceId, $"option:{option.Code}:{tokens.Code}",
+            $"Customer chose to send {option.Ticker} on {tokens.Name} from an exchange (NEAR Intents).");
         return Json(new { ok = true });
     }
 
@@ -95,25 +97,25 @@ public class UISwapCheckoutController(
     [HttpPost("deposits/{invoiceId}/{paymentMethodId}/{option}/network")]
     public async Task<IActionResult> Network(string invoiceId, string paymentMethodId, string option, [FromBody] NetworkChoice body)
     {
-        if (await TokenCheckout(invoiceId, paymentMethodId) is not { } config ||
-            config.EnabledExchangeOptions().FirstOrDefault(o => o.Code.Equals(option, StringComparison.OrdinalIgnoreCase)) is not { } chain)
+        if (await TokenCheckout(invoiceId, paymentMethodId) is not var (tokens, config) ||
+            config.ExchangeOptionsFor(tokens).FirstOrDefault(o => o.Code.Equals(option, StringComparison.OrdinalIgnoreCase)) is not { } chain)
             return NotFound();
-        if (body?.Network is not { } network || !intents.Select(chain, config, invoiceId, network))
+        if (body?.Network is not { } network || network != tokens.IntentsNetworkCode || !intents.Select(chain, config, invoiceId, network))
             return BadRequest(new { error = "That network is not available for this payment." });
         await Note(invoiceId, $"network:{chain.Code}:{network}", $"Customer chose to send {chain.Ticker} on {chain.Networks.First(n => n.Code == network).Name}.");
         return Json(new { ok = true });
     }
 
-    /// <summary>The settings of a token checkout of an unpaid invoice, or null.</summary>
-    async Task<SwapToBtcPaymentMethodConfig?> TokenCheckout(string invoiceId, string paymentMethodId)
+    /// <summary>A token checkout of an unpaid invoice and its settings, or null.</summary>
+    async Task<(SwapSourceChain Chain, SwapToBtcPaymentMethodConfig Config)?> TokenCheckout(string invoiceId, string paymentMethodId)
     {
-        if (!PaymentMethodId.TryParse(paymentMethodId, out var pmi) || SwapSourceChain.Find(pmi) is not { Provider: SwapProvider.Lifi })
+        if (!PaymentMethodId.TryParse(paymentMethodId, out var pmi) || SwapSourceChain.Find(pmi) is not { Provider: SwapProvider.Lifi } chain)
             return null;
         var invoice = await invoiceRepository.GetInvoice(invoiceId);
         if (invoice is null || invoice.Status != InvoiceStatus.New || invoice.GetPaymentPrompt(pmi) is not { Activated: true })
             return null;
         var store = await storeRepository.FindStore(invoice.StoreId);
-        return store?.GetPaymentMethodConfig<SwapToBtcPaymentMethodConfig>(pmi, handlers);
+        return store?.GetPaymentMethodConfig<SwapToBtcPaymentMethodConfig>(pmi, handlers) is { } config ? (chain, config) : null;
     }
 
     public static bool IsTransactionId(string? txHash) =>
