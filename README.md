@@ -82,5 +82,4 @@ Upload the resulting `.btcpay` file under Server Settings → Plugins → Upload
 
 ## Roadmap
 
-- Settle into USDC instead of BTC.
 - Publish on the Plugin Builder.
