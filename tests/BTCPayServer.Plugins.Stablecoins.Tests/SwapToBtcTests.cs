@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using BTCPayServer.Client.Models;
@@ -145,17 +146,27 @@ public class SwapToBtcTests
     }
 
     [Fact]
-    public void ExchangeOptionsComeLastOnTheCheckout()
+    public void ExchangeOptionsAreButtonsNotTabsWhenThereAreOtherWaysToPay()
     {
-        var ids = new[] { "BTC-CHAIN", "NEAR_USDC", "THOR_LITECOIN", "NEAR_USDT", "LIFI_ETHEREUM", "XMR-CHAIN" };
-        var methods = ids.Select(id => new BTCPayServer.Models.InvoicingModels.CheckoutModel.AvailablePaymentMethod
-        {
-            PaymentMethodId = BTCPayServer.Payments.PaymentMethodId.Parse(id),
-            PaymentMethodName = id
-        }).ToList();
-        Assert.Equal(
-            new[] { "BTC-CHAIN", "THOR_LITECOIN", "LIFI_ETHEREUM", "XMR-CHAIN", "NEAR_USDC", "NEAR_USDT" },
-            SwapCheckoutOrdering.Reorder(methods).Select(m => m.PaymentMethodName));
-        Assert.Equal("USDC from exchange", SwapSourceChain.Find(BTCPayServer.Payments.PaymentMethodId.Parse("NEAR_USDC"))!.Name);
+        static List<BTCPayServer.Models.InvoicingModels.CheckoutModel.AvailablePaymentMethod> Methods(params string[] ids) =>
+            ids.Select(id => new BTCPayServer.Models.InvoicingModels.CheckoutModel.AvailablePaymentMethod
+            {
+                PaymentMethodId = BTCPayServer.Payments.PaymentMethodId.Parse(id),
+                PaymentMethodName = id,
+                Displayed = true
+            }).ToList();
+
+        var methods = Methods("BTC-CHAIN", "NEAR_USDC", "THOR_LITECOIN", "NEAR_USDT");
+        var buttons = SwapCheckoutExchangeOptions.Apply(methods);
+        Assert.Equal(new[] { "BTC-CHAIN", "THOR_LITECOIN" }, methods.Where(m => m.Displayed).Select(m => m.PaymentMethodName));
+        Assert.NotNull(buttons);
+        Assert.Equal(new[] { "NEAR_USDC", "NEAR_USDT" }, buttons!.Select(b => (string)b["paymentMethodId"]!));
+        Assert.Equal("Send USDC from an exchange", (string)buttons![0]["label"]!);
+
+        // Paying from an exchange is the only way: the tabs stay, no buttons.
+        var only = Methods("NEAR_USDC", "NEAR_USDT");
+        Assert.Null(SwapCheckoutExchangeOptions.Apply(only));
+        Assert.All(only, m => Assert.True(m.Displayed));
+        Assert.Null(SwapCheckoutExchangeOptions.Apply(Methods("BTC-CHAIN")));
     }
 }
