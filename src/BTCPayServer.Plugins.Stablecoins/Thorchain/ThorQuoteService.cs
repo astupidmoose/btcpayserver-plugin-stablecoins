@@ -107,10 +107,15 @@ public class ThorQuoteService(ThornodeClient client)
         return deposit;
     }
 
-    public static Uri ThornodeUrl(SwapToBtcPaymentMethodConfig config) =>
-        Uri.TryCreate(config.ThornodeUrl, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps
+    public static Uri ThornodeUrl(SwapToBtcPaymentMethodConfig config) => SafeUrl(config.ThornodeUrl, ThornodeClient.DefaultUrl);
+
+    public static Uri MemolessUrl(SwapToBtcPaymentMethodConfig config) => SafeUrl(config.MemolessUrl, MemolessClient.DefaultUrl);
+
+    /// <summary>https only, except plain http to this machine (a local node or a test double).</summary>
+    public static Uri SafeUrl(string? url, string fallback) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u) && (u.Scheme == Uri.UriSchemeHttps || u.Scheme == Uri.UriSchemeHttp && u.IsLoopback)
             ? u
-            : new Uri(ThornodeClient.DefaultUrl);
+            : new Uri(fallback);
 
     /// <summary>The BTC due plus the buffer, in satoshis, rounded up.</summary>
     public static long TargetUnits(decimal btcDue, decimal bufferPercent) =>

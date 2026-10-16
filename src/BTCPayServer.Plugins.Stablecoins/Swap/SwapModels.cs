@@ -21,6 +21,8 @@ public class SwapToBtcPaymentMethodConfig
 
     /// <summary>THORNode REST endpoint used for THORChain quotes. Defaults to a public THORNode gateway.</summary>
     public string? ThornodeUrl { get; set; }
+    /// <summary>THORChain's hosted memoless API; not on the settings page, the default is THORChain's own.</summary>
+    public string? MemolessUrl { get; set; }
     /// <summary>Optional THORName that receives the THORChain affiliate fee.</summary>
     public string? ThorAffiliate { get; set; }
     /// <summary>THORChain affiliate fee in basis points (100 = 1%).</summary>

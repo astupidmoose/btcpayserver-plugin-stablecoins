@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "LI.FI swap panel embedded in BTCPay checkout. Built into ../src/BTCPayServer.Plugins.Stablecoins/Resources/js/swap-panel.js",
+  "description": "Wallet payment panel embedded in BTCPay checkout. Built into ../src/BTCPayServer.Plugins.Stablecoins/Resources/js/swappanel-*.js",
   "scripts": {
     "build": "node build.mjs"
   },
@@ -19,7 +19,13 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "viem": "^2.57.7",
-    "wagmi": "^3.7.7"
+    "wagmi": "^3.7.7",
+    "@lifi/sdk": "^4.12.1",
+    "@lifi/widget-provider": "^4.6.2",
+    "@lifi/wallet-management": "^4.3.4",
+    "@mui/material": "^9.5.0",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"

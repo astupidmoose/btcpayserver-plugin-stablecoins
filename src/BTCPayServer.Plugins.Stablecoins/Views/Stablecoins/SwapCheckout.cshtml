@@ -1,8 +1,12 @@
 @using System.Collections.Generic
+@using System.Linq
 @using BTCPayServer.Plugins.Stablecoins.Swap
 @model BTCPayServer.Models.InvoicingModels.CheckoutModel
 @{
     var version = typeof(StablecoinsPlugin).Assembly.GetName().Version?.ToString();
+    // When this invoice can only be paid from other chains, other plugins' extra tabs (Trocador's "Altcoins",
+    // SideShift...) do not apply: they pay the invoice's BTC, which the customer never sees here.
+    var onlySwaps = Model.AvailablePaymentMethods.Where(pm => pm.Displayed).All(pm => SwapSourceChain.Find(pm.PaymentMethodId) is not null);
     var scriptUrls = new Dictionary<string, string>
     {
         ["evm"] = Url.Content("~/Resources/js/swappanel-evm.js") + "?v=" + version,
@@ -12,90 +16,45 @@
 }
 
 <template id="@SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName">
-    <div class="payment-box stablecoins-swap">
-        <p class="text-center text-muted mb-3" v-if="swap">
-            Pay with any token on {{ swap.chainName }}. It is swapped to BTC in your wallet and sent straight to this invoice.
+    <div class="payment-box stablecoins-swap" v-if="swap">
+        <p class="text-center text-muted mb-3" v-if="swap.active">
+            Pay with any token you hold on {{ swap.chainName }}.
         </p>
         <div ref="panel" class="stablecoins-swap-panel"></div>
         <p v-if="state === 'loading'" class="text-center text-muted my-4">Loading wallet options…</p>
         <div v-if="state === 'error'" class="alert alert-danger mt-3" role="alert">The payment panel could not load: {{ error }}</div>
-        <div v-if="state === 'started'" class="alert alert-info mt-3" role="status">
-            Swap sent. Keep this page open: the invoice updates by itself once the BTC arrives, which can take several minutes.
-        </div>
-        <div v-if="state === 'failed'" class="alert alert-warning mt-3" role="alert">
-            The swap did not complete. Nothing was sent to the invoice; you can try again with another route or token.
-        </div>
-        <div v-if="model.address" class="input-group mt-3">
-            <div class="form-floating" id="Address_@Model.PaymentMethodId">
-                <vc:truncate-center text="model.address" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
-                <label>BTC address receiving the swap</label>
-            </div>
-        </div>
     </div>
 </template>
 
-
-<template id="@SwapToBtcCheckoutModelExtension.ThorCheckoutBodyComponentName">
-    <div class="payment-box stablecoins-thor" v-if="thor">
-        <p class="text-center text-muted mb-3">
-            Send {{ thor.ticker }} from your own wallet. THORChain swaps it to BTC and pays this invoice.
-        </p>
-        <p v-if="!deposit && !error" class="text-center text-muted my-4">Getting a THORChain quote…</p>
-        <div v-if="error" class="alert alert-danger" role="alert">
-            {{ error }}
-            <button type="button" class="btn btn-link p-0 ms-1 align-baseline" v-on:click="refresh(true)">Try again</button>
-        </div>
-        <template v-if="deposit">
-            <div class="qr-container clipboard-button" :data-clipboard="deposit.inboundAddress">
-                <div><qrcode :value="deposit.paymentUri" tag="div" :options="qrOptions" /></div>
-                <img class="qr-icon" :src="model.cryptoImage" :alt="thor.chainName" />
-            </div>
-            <dl class="mt-3 mb-0">
-                <div class="d-flex justify-content-between align-items-center gap-2">
-                    <dt>Send exactly</dt>
-                    <dd class="clipboard-button clipboard-button-hover fw-semibold mb-0" :data-clipboard="deposit.amount" data-clipboard-hover="start">{{ deposit.amount }} {{ deposit.ticker }}</dd>
-                </div>
-            </dl>
-            <div class="input-group mt-3">
-                <div class="form-floating" id="ThorVault_@Model.PaymentMethodId">
-                    <vc:truncate-center text="deposit.inboundAddress" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
-                    <label>To this THORChain vault</label>
-                </div>
-            </div>
-            <div class="input-group mt-3">
-                <div class="form-floating" id="ThorMemo_@Model.PaymentMethodId">
-                    <vc:truncate-center text="deposit.memo" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
-                    <label>With this memo ({{ deposit.memoField }})</label>
-                </div>
-            </div>
-            <div class="alert alert-warning mt-3 mb-0 small" role="note">
-                Your wallet must include the memo. Without it, or if you send from an exchange, THORChain cannot match the swap
-                and refunds the coins to the sending address, minus network fees.
-            </div>
-            <p class="text-center text-muted small mt-3 mb-0">
-                Quote valid for {{ minutesLeft }} more min<span v-if="deposit.totalSwapSeconds">; BTC usually arrives about {{ Math.ceil(deposit.totalSwapSeconds / 60) }} min after you send</span>.
-            </p>
-            <p v-if="deposit.warning" class="text-center text-muted small mt-1 mb-0">{{ deposit.warning }}</p>
+<template id="@SwapToBtcCheckoutModelExtension.CoinStatusComponentName">
+    <div class="payment-box text-center" v-if="coin">
+        <template v-if="coin.state === 'preparing'">
+            <span class="spinner-border spinner-border-sm text-muted" role="status"></span>
+            <p class="text-muted mt-2 mb-0">Getting your {{ coin.ticker }} payment address…</p>
         </template>
-        <form class="mt-3" v-on:submit.prevent="sendTxId" v-if="!txSaved">
-            <label class="form-label small text-muted" for="ThorTxId_@Model.PaymentMethodId">Already sent? Paste your {{ thor.ticker }} transaction ID so the store can follow the swap.</label>
-            <div class="input-group input-group-sm">
-                <input id="ThorTxId_@Model.PaymentMethodId" v-model.trim="txId" class="form-control font-monospace" autocomplete="off" spellcheck="false" />
-                <button type="submit" class="btn btn-secondary" :disabled="!txId">Save</button>
-            </div>
-            <div v-if="txError" class="text-danger small mt-1">{{ txError }}</div>
-        </form>
-        <p v-else class="text-center text-muted small mt-3 mb-0">Transaction saved. The invoice updates by itself when the BTC arrives.</p>
+        <template v-else-if="coin.state === 'received'">
+            <p class="fw-semibold mb-1">{{ coin.ticker }} payment received</p>
+            <p class="text-muted small mb-0">
+                Keep this page open. It updates by itself once the payment is confirmed<span v-if="coin.minutes">, usually within {{ coin.minutes }} minutes</span>.
+            </p>
+        </template>
+        <template v-else-if="coin.state === 'failed'">
+            <div class="alert alert-warning mb-0" role="alert">{{ coin.error }}</div>
+        </template>
     </div>
 </template>
 
 <style>
-    .stablecoins-swap-panel { min-height: 3rem; margin: 0 -.5rem; }
-    .stablecoins-swap-panel > div { max-width: 100%; }
+    .stablecoins-swap-panel { min-height: 3rem; }
+    .stablecoins-tokens { max-height: 16rem; overflow-y: auto; }
 </style>
 
 <script>
     (function () {
+        @if (onlySwaps)
+        {
+            @:document.querySelectorAll('.payment-methods-wrapper .btcpay-pills > a:not([v-for])').forEach(e => e.remove());
+        }
         const scriptUrls = @Safe.Json(scriptUrls);
         const loading = {};
         // Each wallet family (EVM, Solana, Tron) is its own bundle; load only the one this chain needs.
@@ -140,15 +99,14 @@
             props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
             template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName),
             data () {
-                return { state: 'loading', error: null, mountedDue: null, mountedAddress: null, panel: null };
+                return { state: 'loading', error: null, mounted: null, panel: null, sent: false };
             },
             computed: {
                 swap () { return this.model.stablecoinsSwap; }
             },
             watch: {
-                // The panel quotes the amount due; refresh it after a partial payment, but never mid-swap.
-                'model.due' () { if (this.state === 'ready' || this.state === 'failed') this.render(); },
-                'model.address' () { if (this.state !== 'started') this.render(); }
+                // The panel quotes what is due; refresh it after a partial payment, but never once a payment was sent.
+                'swap.btcDue' () { if (!this.sent) this.render(); }
             },
             mounted () { this.render(); },
             beforeDestroy () {
@@ -157,14 +115,18 @@
             methods: {
                 async render () {
                     const swap = this.swap;
-                    const btcDue = btcToRequest(this.model.due, swap && swap.bufferPercent);
-                    if (!swap || !btcDue) { this.state = 'idle'; return; }
-                    if (this.mountedDue === btcDue && this.mountedAddress === swap.btcAddress) return;
+                    const btcDue = swap && swap.active ? btcToRequest(swap.btcDue, swap.bufferPercent) : null;
+                    if (!btcDue) {
+                        if (this.panel && this.$refs.panel) this.panel.unmount(this.$refs.panel);
+                        this.state = 'idle';
+                        return;
+                    }
+                    const key = `${btcDue}:${swap.btcAddress}`;
+                    if (this.mounted === key) return;
                     try {
                         const panel = await loadPanel(familyOf(Number(swap.fromChain)));
                         this.panel = panel;
-                        this.mountedDue = btcDue;
-                        this.mountedAddress = swap.btcAddress;
+                        this.mounted = key;
                         panel.mount(this.$refs.panel, {
                             integrator: swap.integrator,
                             apiKey: swap.apiKey,
@@ -173,16 +135,16 @@
                             fromChain: swap.fromChain,
                             btcAddress: swap.btcAddress,
                             btcDue,
-                            invoiceLabel: swap.invoiceLabel,
                             appearance: appearance(),
                             primaryColor: getComputedStyle(document.documentElement).getPropertyValue('--btcpay-primary').trim() || undefined,
                             onEvent: (kind, data) => {
-                                if (kind === 'tx' && data && data.txHash) reportSource(swap.sourceUrl, data.txHash, data.chainId).catch(() => {});
-                                else if (kind === 'started') this.state = 'started';
-                                else if (kind === 'failed') this.state = 'failed';
+                                if (kind === 'tx' && data && data.txHash) {
+                                    this.sent = true;
+                                    reportSource(swap.sourceUrl, data.txHash, data.chainId).catch(() => {});
+                                }
                             }
                         });
-                        if (this.state !== 'started') this.state = 'ready';
+                        this.state = 'ready';
                     } catch (e) {
                         this.state = 'error';
                         this.error = e && e.message ? e.message : String(e);
@@ -191,58 +153,23 @@
             }
         });
 
-        Vue.component(@Safe.Json(SwapToBtcCheckoutModelExtension.ThorCheckoutBodyComponentName), {
+        Vue.component(@Safe.Json(SwapToBtcCheckoutModelExtension.CoinStatusComponentName), {
             props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
-            template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.ThorCheckoutBodyComponentName),
-            components: { qrcode: VueQrcode },
-            data () {
-                return { deposit: null, error: null, now: Date.now(), timer: null, fetchedDue: null, txId: '', txSaved: false, txError: null };
-            },
+            template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.CoinStatusComponentName),
+            data () { return { timer: null }; },
             computed: {
-                thor () { return this.model.stablecoinsThor; },
-                minutesLeft () {
-                    return this.deposit ? Math.max(0, Math.floor((this.deposit.expiry * 1000 - this.now) / 60000)) : 0;
-                }
+                coin () { return this.model.stablecoinsCoin; }
             },
-            watch: {
-                // A partial payment changes what is due; get a new quote for the rest.
-                'model.due' () { this.refresh(false); }
-            },
+            // The address is prepared in the background; ask for the updated invoice until it is ready.
+            // BTCPay's checkout only polls when its live connection is down, so this does it while needed.
             mounted () {
-                this.refresh(true);
                 this.timer = setInterval(() => {
-                    this.now = Date.now();
-                    // Vaults rotate: never show a deposit address past its quote's expiry.
-                    if (this.deposit && this.deposit.expiry * 1000 - this.now < 60000) this.refresh(true);
-                }, 15000);
+                    const state = this.coin && this.coin.state;
+                    if ((state === 'preparing' || state === 'failed' || state === 'received') && this.$root && this.$root.fetchData)
+                        this.$root.fetchData();
+                }, 4000);
             },
-            beforeDestroy () { clearInterval(this.timer); },
-            methods: {
-                async sendTxId () {
-                    this.txError = null;
-                    try {
-                        if (await reportSource(this.thor.sourceUrl, this.txId)) this.txSaved = true;
-                        else this.txError = 'That does not look like a transaction ID.';
-                    } catch (e) {
-                        this.txError = 'Could not save it. Please try again.';
-                    }
-                },
-                async refresh (force) {
-                    if (!this.thor || (!force && this.fetchedDue === this.model.due)) return;
-                    this.fetchedDue = this.model.due;
-                    try {
-                        const response = await fetch(this.thor.depositUrl, { headers: { Accept: 'application/json' } });
-                        const data = await response.json();
-                        if (data.error) { this.error = data.error; this.deposit = null; return; }
-                        this.error = null;
-                        this.deposit = data;
-                        this.now = Date.now();
-                    } catch (e) {
-                        this.error = 'The THORChain quote could not be loaded.';
-                        this.deposit = null;
-                    }
-                }
-            }
+            beforeDestroy () { clearInterval(this.timer); }
         });
     })();
 </script>

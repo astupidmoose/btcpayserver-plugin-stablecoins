@@ -10,7 +10,7 @@ public enum SwapProvider
 {
     /// <summary>Tokens on EVM chains, Solana and Tron, through the LI.FI widget and the customer's connected wallet.</summary>
     Lifi,
-    /// <summary>Native coins through THORChain: the customer sends the coin to a THORChain vault with a memo.</summary>
+    /// <summary>Native coins through THORChain: the customer sends an exact amount to a THORChain vault, no memo (memoless deposit).</summary>
     Thorchain
 }
 
@@ -34,8 +34,8 @@ public record SwapSourceChain
     public int Decimals { get; init; } = 8;
     /// <summary>URI scheme for the deposit QR code, for example litecoin. Null when wallets have no common one.</summary>
     public string? UriScheme { get; init; }
-    /// <summary>Where the customer's wallet puts the THORChain memo, shown in the checkout's instructions.</summary>
-    public string? MemoField { get; init; }
+    /// <summary>The coin's icon; BTCPay's own where it has one, so the checkout looks like its own coin invoices.</summary>
+    public string? CoinImage { get; init; }
 
     public string? ThorChain => ThorAsset?.Split('.')[0];
 
@@ -45,13 +45,13 @@ public record SwapSourceChain
     /// </summary>
     public PaymentMethodId PaymentMethodId => new($"{(Provider == SwapProvider.Lifi ? "LIFI" : "THOR")}_{Code}");
 
-    public string Image => $"Resources/chains/{Code.ToLowerInvariant()}.svg";
+    public string Image => CoinImage ?? $"Resources/chains/{Code.ToLowerInvariant()}.svg";
 
     static SwapSourceChain Lifi(string code, string name, long chainId) =>
         new() { Code = code, Name = name, Provider = SwapProvider.Lifi, LifiChainId = chainId };
 
-    static SwapSourceChain Thor(string code, string name, string asset, string ticker, int decimals, string? uriScheme, string memoField) =>
-        new() { Code = code, Name = name, Provider = SwapProvider.Thorchain, ThorAsset = asset, Ticker = ticker, Decimals = decimals, UriScheme = uriScheme, MemoField = memoField };
+    static SwapSourceChain Thor(string code, string name, string asset, string ticker, int decimals, string? uriScheme, string? image = null) =>
+        new() { Code = code, Name = name, Provider = SwapProvider.Thorchain, ThorAsset = asset, Ticker = ticker, Decimals = decimals, UriScheme = uriScheme, CoinImage = image };
 
     public const long SolanaLifiChainId = 1151111081099710;
     public const long TronLifiChainId = 728126428;
@@ -67,14 +67,13 @@ public record SwapSourceChain
         Lifi("AVALANCHE", "Avalanche", 43114),
         Lifi("SOLANA", "Solana", SolanaLifiChainId),
         Lifi("TRON", "Tron", TronLifiChainId),
-        // THORChain's other non-EVM coins. BCH is left out on purpose. Solana and Tron go through LI.FI,
-        // which also takes their tokens. RUNE (needs a THORChain wallet transaction) and Monero
-        // (cannot carry a memo) need THORChain's memoless deposits, which are not built yet.
-        Thor("LITECOIN", "Litecoin", "LTC.LTC", "LTC", 8, "litecoin", "OP_RETURN"),
-        Thor("DOGECOIN", "Dogecoin", "DOGE.DOGE", "DOGE", 8, "dogecoin", "OP_RETURN"),
-        Thor("ZCASH", "Zcash", "ZEC.ZEC", "ZEC", 8, "zcash", "OP_RETURN, from a transparent (t1) address"),
-        Thor("COSMOS", "Cosmos Hub", "GAIA.ATOM", "ATOM", 6, null, "memo"),
-        Thor("XRP", "XRP Ledger", "XRP.XRP", "XRP", 6, null, "memo"),
+        // THORChain's other non-EVM coins with memoless deposits. BCH is left out on purpose. Solana and Tron go
+        // through LI.FI, which also takes their tokens. Monero is not offered by THORChain's memoless API yet.
+        Thor("LITECOIN", "Litecoin", "LTC.LTC", "LTC", 8, "litecoin", "imlegacy/litecoin.svg"),
+        Thor("DOGECOIN", "Dogecoin", "DOGE.DOGE", "DOGE", 8, "dogecoin", "imlegacy/dogecoin.png"),
+        Thor("ZCASH", "Zcash", "ZEC.ZEC", "ZEC", 8, "zcash"),
+        Thor("COSMOS", "Cosmos Hub", "GAIA.ATOM", "ATOM", 6, null),
+        Thor("XRP", "XRP Ledger", "XRP.XRP", "XRP", 6, null),
     ];
 
     static readonly Dictionary<PaymentMethodId, SwapSourceChain> ByPmi = All.ToDictionary(c => c.PaymentMethodId);
