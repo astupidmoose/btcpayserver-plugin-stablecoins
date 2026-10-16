@@ -12,8 +12,8 @@ public enum SwapProvider
     Lifi,
     /// <summary>
     /// Stablecoins through NEAR Intents' 1Click API: the customer picks a network and sends an exact amount to a
-    /// one-time deposit address, from any wallet or exchange. Not a payment method of its own (so WooCommerce never
-    /// lists it): an option inside the token checkouts, paid into that payment method's BTC address.
+    /// one-time deposit address, from any wallet or exchange. Not a payment method of its own (so it is never
+    /// listed separately): an option inside the token checkouts, paid into that payment method's BTC address.
     /// </summary>
     Intents
 }
@@ -25,7 +25,7 @@ public record IntentsNetwork(string Code, string Name, AddressFamily Family, str
 
 /// <summary>
 /// A chain customers can pay from. Each one is its own BTCPay payment method, so
-/// WooCommerce (separate gateways) and the checkout list them as "Ethereum", "Base"...
+/// store integrations and the checkout list them as "Ethereum", "Base"...
 /// Every one of them settles the invoice in BTC to the store's own on-chain wallet.
 /// </summary>
 public record SwapSourceChain
@@ -48,7 +48,7 @@ public record SwapSourceChain
     public IReadOnlyList<IntentsNetwork> Networks { get; init; } = [];
 
     /// <summary>
-    /// LIFI_ETHEREUM. Underscores, not dashes: the WooCommerce BTCPay plugin turns every '-' into '_'
+    /// LIFI_ETHEREUM. Underscores, not dashes: some store integrations turn every '-' into '_'
     /// in the payment method it sends back when creating the invoice, and BTCPay only maps that back for built-in coins.
     /// </summary>
     public PaymentMethodId PaymentMethodId => new($"{Provider switch { SwapProvider.Lifi => "LIFI", _ => "NEAR" }}_{Code}");

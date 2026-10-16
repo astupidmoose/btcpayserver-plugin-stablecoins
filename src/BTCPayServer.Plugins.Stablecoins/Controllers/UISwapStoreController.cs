@@ -130,7 +130,7 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         {
             var handler = handlers[chain.PaymentMethodId];
             var on = vm.Enabled && enabled.Contains(chain);
-            // Disabled chains are removed, not just excluded, so WooCommerce stops listing them.
+            // Disabled chains are removed, not just excluded, so store integrations stop listing them.
             store.SetPaymentMethodConfig(handler, on ? config : null);
             blob.SetExcluded(chain.PaymentMethodId, !on);
         }

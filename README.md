@@ -2,12 +2,12 @@
 
 A BTCPay Server plugin that lets customers pay a normal BTC invoice from other chains.
 
-Each source chain is its own BTCPay payment method, so the WooCommerce BTCPay plugin ("Separate payment gateways") lists them as separate options ("Ethereum", "Base"...). Whatever the customer pays with, the invoice is priced in BTC and native BTC lands at a fresh address from the store's own BTC wallet. The plugin never holds anyone's coins or keys.
+Each source chain is its own BTCPay payment method, so any checkout that lists BTCPay's payment methods (BTCPay's own, or a store integration) can offer them as separate options ("Ethereum", "Base"...). Whatever the customer pays with, the invoice is priced in BTC and native BTC lands at a fresh address from the store's own BTC wallet. The plugin never holds anyone's coins or keys.
 
 | Route | Chains | How the customer pays |
 |---|---|---|
 | **LI.FI** (tokens from a wallet) | Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Solana, Tron | Connects their wallet in the [LI.FI](https://li.fi) panel, picks any token, signs once. A bridge delivers BTC. |
-| **NEAR Intents** (USDC, USDT from an exchange) | On each token checkout's own chain, where NEAR Intents takes the coin: USDC on Ethereum, Base, Arbitrum, Polygon, Solana, BNB Smart Chain, Avalanche, Optimism; USDT on Ethereum, Tron, BNB Smart Chain, Solana, Polygon, Arbitrum, Avalanche | Not a payment method (WooCommerce does not list it): "Send USDC from an exchange" buttons under the LI.FI panel. The customer sends an exact amount on that chain to a one-time deposit address from the [1Click API](https://github.com/defuse-protocol/one-click-sdk-typescript) (an exact-output quote for the BTC due, to the invoice's address). NEAR Intents holds the deposit until its solvers swap it; anything it cannot swap, and any excess, goes to the store's refund address for that network. Needs a 1Click API key. |
+| **NEAR Intents** (USDC, USDT from an exchange) | On each token checkout's own chain, where NEAR Intents takes the coin: USDC on Ethereum, Base, Arbitrum, Polygon, Solana, BNB Smart Chain, Avalanche, Optimism; USDT on Ethereum, Tron, BNB Smart Chain, Solana, Polygon, Arbitrum, Avalanche | Not a payment method of its own: "Send USDC from an exchange" buttons under the LI.FI panel. The customer sends an exact amount on that chain to a one-time deposit address from the [1Click API](https://github.com/defuse-protocol/one-click-sdk-typescript) (an exact-output quote for the BTC due, to the invoice's address). NEAR Intents holds the deposit until its solvers swap it; anything it cannot swap, and any excess, goes to the store's refund address for that network. Needs a 1Click API key. |
 
 ## What it adds
 
@@ -23,7 +23,7 @@ Each source chain is its own BTCPay payment method, so the WooCommerce BTCPay pl
 | Store settings page (Wallets → Other Chains), with an on/off switch for the whole feature | `Controllers/UISwapStoreController.cs`, `Views/Stablecoins/SwapSettings.cshtml` |
 | Swap payments on the invoice page | `Views/Stablecoins/ViewSwapToBtcPaymentData.cshtml` |
 
-Payment method ids use underscores, not dashes: the WooCommerce plugin sends the id back with every `-` turned into `_`, and BTCPay only maps that back for its built-in coins.
+Payment method ids use underscores, not dashes: some store integrations send the id back with every `-` turned into `_`, and BTCPay only maps that back for its built-in coins.
 
 ## How a payment works
 
@@ -50,7 +50,7 @@ The wallet address, transaction hashes, deposit address and quote id are also ad
 
 ## Settings (per store)
 
-- An Enable switch for the whole feature. Off removes every chain from checkout and WooCommerce but keeps your choices.
+- An Enable switch for the whole feature. Off removes every chain from every checkout but keeps your choices.
 - Which chains are enabled, and USDC/USDT from an exchange.
 - LI.FI: integrator name (from [portal.li.fi](https://portal.li.fi)), optional API key, integrator fee (default 0).
 - WalletConnect project ID (optional): lets customers connect a mobile EVM wallet by scanning a QR code; browser wallets work without it. To get one, sign up free at [Reown](https://cloud.reown.com) (formerly WalletConnect Cloud), create a project, copy its Project ID into this field, and add your BTCPay domain (for example `btcpay.example.com`) to the project's allowed domains.

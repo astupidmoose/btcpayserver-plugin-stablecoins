@@ -17,11 +17,9 @@
 <div class="row">
     <div class="col-xl-8 col-xxl-constrain">
         <p class="text-secondary">
-            Each chain below becomes its own payment method, so WooCommerce can list it as a separate option.
+            Each chain below becomes its own payment method, so any checkout that lists BTCPay's payment methods can offer it as a separate option.
             Invoices are priced and settled in BTC: the customer's coins are swapped to native BTC and paid to a fresh address
             from this store's BTC wallet. BTCPay never holds the customer's coins.
-            In WooCommerce (BTCPay plugin, "Separate payment gateways"), each enabled chain shows up as its own gateway named by
-            the code next to it. Rename it there, for example to "Ethereum".
         </p>
         @if (!Model.HasBtcWallet)
         {
@@ -39,7 +37,7 @@
                 <input asp-for="Enabled" type="checkbox" class="btcpay-toggle me-3" />
                 <div>
                     <label asp-for="Enabled" class="form-check-label"></label>
-                    <div class="form-text mt-0">When off, no chain below is offered at checkout or in WooCommerce. Your choices and settings are kept.</div>
+                    <div class="form-text mt-0">When off, no chain below is offered at any checkout. Your choices and settings are kept.</div>
                 </div>
             </div>
             <h4 class="mt-4 mb-2">Tokens, through LI.FI</h4>
@@ -79,7 +77,7 @@
 
             <h4 class="mt-5 mb-2">USDC and USDT from any wallet or exchange, through NEAR Intents</h4>
             <p class="text-secondary">
-                Not a payment method of its own, so WooCommerce does not list it: the token checkouts above (Ethereum, Base...)
+                Not a payment method of its own, so it is never listed separately: the token checkouts above (Ethereum, Base...)
                 show "Send USDC from an exchange" and "Send USDT from an exchange" buttons under the wallet panel.
                 The customer picks the network they send from, then gets a QR code, a one-time address and an exact amount, like any coin invoice.
                 It works from exchanges too, since nothing needs to be connected or signed.

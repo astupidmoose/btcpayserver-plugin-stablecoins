@@ -13,11 +13,11 @@ using Newtonsoft.Json.Linq;
 namespace BTCPayServer.Plugins.Stablecoins.Swap;
 
 /// <summary>
-/// Version 0.2 stored each chain's settings under a dashed id (LIFI-BASE). WooCommerce cannot send those
+/// Version 0.2 stored each chain's settings under a dashed id (LIFI-BASE). Some store integrations cannot send those
 /// back, so 0.3 uses underscores (LIFI_BASE). On startup this moves every store's settings, and its
 /// enabled or disabled state, to the new id, so nothing has to be re-entered.
 /// Version 0.7 makes USDC and USDT from an exchange options of the token checkouts instead of payment methods
-/// (NEAR_USDC, NEAR_USDT), so WooCommerce stops listing them: their payment methods are removed, and whether
+/// (NEAR_USDC, NEAR_USDT), so integrations stop listing them: their payment methods are removed, and whether
 /// they were on is kept in the settings.
 /// Version 0.8 drops THORChain (THOR_LITECOIN, THOR_ETH...): those payment methods are removed.
 /// </summary>
