@@ -65,7 +65,6 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
         services.AddUIExtension("store-wallets-nav", $"{ViewsDirectory}/StoreNavExtension.cshtml");
         services.AddUIExtension("store-invoices-payments", $"{ViewsDirectory}/ViewSwapToBtcPaymentData.cshtml");
         services.AddUIExtension("checkout-end", $"{ViewsDirectory}/SwapCheckout.cshtml");
-        services.AddUIExtension("checkout-payment-method", $"{ViewsDirectory}/ExchangeButtons.cshtml");
     }
 
     static SwapToBtcPaymentMethodHandler Handler(System.IServiceProvider provider, SwapSourceChain source) =>

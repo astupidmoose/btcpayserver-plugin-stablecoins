@@ -1,9 +1,0 @@
-@* Inside BTCPay's checkout template, under the payment method tabs: the "from exchange" options as buttons
-   (see SwapCheckoutExchangeOptions, which hides their tabs and fills srvModel.stablecoinsExchange). *@
-<div class="w-100 d-flex flex-wrap justify-content-center gap-2 mt-2" v-if="srvModel.stablecoinsExchange && srvModel.stablecoinsExchange.length">
-    <button type="button" v-for="x in srvModel.stablecoinsExchange" :key="x.paymentMethodId"
-            class="btn btn-sm"
-            :class="pmId === x.paymentMethodId ? 'btn-primary' : 'btn-outline-secondary'"
-            v-on:click.prevent="changePaymentMethod(x.paymentMethodId)"
-            v-text="x.label"></button>
-</div>

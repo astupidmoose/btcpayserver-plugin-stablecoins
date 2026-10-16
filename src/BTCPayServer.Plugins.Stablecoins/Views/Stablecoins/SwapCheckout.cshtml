@@ -23,6 +23,7 @@
         <div ref="panel" class="stablecoins-swap-panel"></div>
         <p v-if="state === 'loading'" class="text-center text-muted my-4">Loading wallet options…</p>
         <div v-if="state === 'error'" class="alert alert-danger mt-3" role="alert">The payment panel could not load: {{ error }}</div>
+        <stablecoins-exchange-buttons :model="model"></stablecoins-exchange-buttons>
     </div>
 </template>
 
@@ -48,6 +49,18 @@
     <div>
         <stablecoins-network-picker :model="model"></stablecoins-network-picker>
         <component :is="'@SwapToBtcCheckoutModelExtension.BitcoinCheckoutBodyComponentName'" :model="model"></component>
+        <stablecoins-exchange-buttons :model="model"></stablecoins-exchange-buttons>
+    </div>
+</template>
+
+@* The "from exchange" options, when they are not tabs (see SwapCheckoutExchangeOptions). *@
+<template id="stablecoins-exchange-buttons">
+    <div class="d-flex flex-column gap-2 mt-4" v-if="model.stablecoinsExchange && model.stablecoinsExchange.length">
+        <button type="button" v-for="x in model.stablecoinsExchange" :key="x.paymentMethodId"
+                class="btn"
+                :class="model.paymentMethodId === x.paymentMethodId ? 'btn-primary' : 'btn-outline-secondary'"
+                v-on:click.prevent="$root.changePaymentMethod(x.paymentMethodId)"
+                v-text="x.label"></button>
     </div>
 </template>
 
@@ -200,6 +213,11 @@
         Vue.component(@Safe.Json(SwapToBtcCheckoutModelExtension.DepositCheckoutBodyComponentName), {
             props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
             template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.DepositCheckoutBodyComponentName)
+        });
+
+        Vue.component('stablecoins-exchange-buttons', {
+            props: ['model'],
+            template: '#stablecoins-exchange-buttons'
         });
 
         Vue.component('stablecoins-network-picker', {
