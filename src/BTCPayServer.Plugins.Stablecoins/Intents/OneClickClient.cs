@@ -133,4 +133,14 @@ public class OneClickSwapDetails
     [JsonProperty("depositedAmount")] public string? DepositedAmount { get; set; }
     [JsonProperty("refundedAmount")] public string? RefundedAmount { get; set; }
     [JsonProperty("refundReason")] public string? RefundReason { get; set; }
+    /// <summary>The customer's deposit transaction(s) on the source chain.</summary>
+    [JsonProperty("originChainTxHashes")] public List<OneClickTxHash>? OriginChainTxHashes { get; set; }
+    /// <summary>The BTC payout transaction(s).</summary>
+    [JsonProperty("destinationChainTxHashes")] public List<OneClickTxHash>? DestinationChainTxHashes { get; set; }
+}
+
+public class OneClickTxHash
+{
+    [JsonProperty("hash")] public string? Hash { get; set; }
+    [JsonProperty("explorerUrl")] public string? ExplorerUrl { get; set; }
 }

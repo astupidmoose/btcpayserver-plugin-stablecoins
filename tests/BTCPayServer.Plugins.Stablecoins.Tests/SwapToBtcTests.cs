@@ -88,6 +88,27 @@ public class SwapToBtcTests
         Assert.Equal(expected, UISwapCheckoutController.IsTransactionId(txHash));
     }
 
+    [Theory]
+    [InlineData("0x52908400098527886E0F7030069857D2E4169EE7", true)]
+    [InlineData("7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", true)]
+    [InlineData("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", true)]
+    [InlineData("0x5290<b>", false)]
+    [InlineData("short", false)]
+    [InlineData(null, false)]
+    public void AcceptsOnlyWalletAddresses(string? address, bool expected)
+    {
+        Assert.Equal(expected, UISwapCheckoutController.IsWalletAddress(address));
+    }
+
+    [Fact]
+    public void ReadsTheDepositAndPayoutTransactionsFromNearIntents()
+    {
+        var status = Newtonsoft.Json.JsonConvert.DeserializeObject<BTCPayServer.Plugins.Stablecoins.Intents.OneClickStatus>(
+            """{"status":"SUCCESS","swapDetails":{"originChainTxHashes":[{"hash":"0xabc","explorerUrl":"https://basescan.org/tx/0xabc"}],"destinationChainTxHashes":[{"hash":"f00d","explorerUrl":""}]}}""")!;
+        Assert.Equal("0xabc", status.SwapDetails!.OriginChainTxHashes!.Single().Hash);
+        Assert.Equal("f00d", status.SwapDetails.DestinationChainTxHashes!.Single().Hash);
+    }
+
     [Fact]
     public void LinksToTheRightExplorer()
     {

@@ -41,7 +41,12 @@ Payment method ids use underscores, not dashes: the WooCommerce plugin sends the
 - **An exchange deposit NEAR Intents cannot swap** (too little, too late): it goes to the store's refund address on that network; refund the customer from there.
 - **Late BTC:** recorded as paid late, like late on-chain BTC.
 
-For support, the invoice log records each LI.FI transaction the customer signs (linked to scan.li.fi) and each NEAR Intents quote (deposit address, amount, deadline, refund address), its status changes, and why a quote failed.
+For support, the invoice log records:
+
+- **Wallet payments:** the customer's wallet address, token and amount as soon as they press pay (before signing), then each transaction they sign, linked to scan.li.fi.
+- **Exchange payments:** each NEAR Intents quote (deposit address, amount, deadline, refund address, quote id), its status changes, why a quote failed, the customer's deposit transaction and NEAR Intents' BTC payout transaction.
+
+The wallet address, transaction hashes, deposit address and quote id are also added to the invoice's search terms, so pasting whatever the customer sends you (their wallet, a transaction hash, the address they paid) into the Invoices search finds the invoice.
 
 ## Settings (per store)
 

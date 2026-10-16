@@ -135,12 +135,18 @@
             const sats = Math.ceil(value * 1e8 * (1 + (Number(bufferPercent) || 0) / 100));
             return (sats / 1e8).toFixed(8);
         }
-        function reportSource(url, txHash, chainId) {
+        function reportSource(url, data) {
             return fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-                body: JSON.stringify({ txHash, chainId })
+                body: JSON.stringify(data)
             }).then(r => r.ok);
+        }
+        // "1234500" with 6 decimals is "1.2345".
+        function formatUnits(units, decimals) {
+            const s = String(units).padStart(decimals + 1, '0');
+            const whole = s.slice(0, s.length - decimals), frac = s.slice(s.length - decimals).replace(/0+$/, '');
+            return frac ? `${whole}.${frac}` : whole;
         }
         function appearance() {
             const theme = document.documentElement.getAttribute('data-btcpay-theme');
@@ -190,9 +196,18 @@
                             appearance: appearance(),
                             primaryColor: getComputedStyle(document.documentElement).getPropertyValue('--btcpay-primary').trim() || undefined,
                             onEvent: (kind, data) => {
+                                // Before the customer signs: their wallet, so a payment can be traced even if the transaction is never reported.
+                                if (kind === 'started' && data && data.action && data.action.fromAddress) {
+                                    const a = data.action, t = a.fromToken || {};
+                                    reportSource(swap.sourceUrl, {
+                                        fromAddress: a.fromAddress,
+                                        token: t.symbol,
+                                        amount: a.fromAmount && t.decimals != null ? formatUnits(a.fromAmount, t.decimals) : undefined
+                                    }).catch(() => {});
+                                }
                                 if (kind === 'tx' && data && data.txHash) {
                                     this.sent = true;
-                                    reportSource(swap.sourceUrl, data.txHash, data.chainId).catch(() => {});
+                                    reportSource(swap.sourceUrl, { txHash: data.txHash, chainId: data.chainId }).catch(() => {});
                                 }
                             }
                         });

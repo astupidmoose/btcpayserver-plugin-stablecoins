@@ -33,12 +33,16 @@ public class UISwapCheckoutController(
 {
     // Keeps one invoice from filling its log: a handful of source transactions and quotes is plenty.
     static readonly ConcurrentDictionary<string, byte> Logged = new();
-    const int MaxNotesPerInvoice = 10;
+    const int MaxNotesPerInvoice = 20;
 
     public class SourceTransaction
     {
         public string? TxHash { get; set; }
         public long? ChainId { get; set; }
+        /// <summary>The customer's wallet, reported when they start paying (before signing).</summary>
+        public string? FromAddress { get; set; }
+        public string? Token { get; set; }
+        public string? Amount { get; set; }
     }
 
     /// <summary>
@@ -51,13 +55,25 @@ public class UISwapCheckoutController(
         if (!PaymentMethodId.TryParse(paymentMethodId, out var pmi) || SwapSourceChain.Find(pmi) is not { } chain)
             return NotFound();
         var txHash = body?.TxHash?.Trim();
-        if (!IsTransactionId(txHash))
+        var from = body?.FromAddress?.Trim();
+        if (txHash is not null && !IsTransactionId(txHash))
             return BadRequest(new { error = "That does not look like a transaction ID." });
+        if (from is not null && !IsWalletAddress(from))
+            return BadRequest(new { error = "That does not look like a wallet address." });
+        if (txHash is null && from is null)
+            return BadRequest(new { error = "Nothing to record." });
         var invoice = await invoiceRepository.GetInvoice(invoiceId);
         if (invoice?.GetPaymentPrompt(pmi) is not { Activated: true })
             return NotFound();
-        await Note(invoiceId, $"tx:{txHash}",
-            $"Customer's {chain.Name} transaction for this swap: {txHash}. Track it at {ExplorerLink(chain, txHash!)}");
+        if (from is not null)
+        {
+            var paying = IsShortText(body!.Amount) && IsShortText(body.Token) ? $"{body.Amount} {body.Token}" : "tokens";
+            if (await Note(invoiceId, $"from:{from}", $"Customer started paying {paying} on {chain.Name} from wallet {from}."))
+                await invoiceRepository.AddSearchTerms(invoiceId, [from]);
+        }
+        if (txHash is not null &&
+            await Note(invoiceId, $"tx:{txHash}", $"Customer's {chain.Name} transaction for this swap: {txHash}. Track it at {ExplorerLink(chain, txHash)}"))
+            await invoiceRepository.AddSearchTerms(invoiceId, [txHash]);
         return Json(new { ok = true });
     }
 
@@ -120,17 +136,26 @@ public class UISwapCheckoutController(
     public static bool IsTransactionId(string? txHash) =>
         txHash is { Length: >= 32 and <= 128 } && txHash.All(c => char.IsAsciiLetterOrDigit(c) || c is 'x' or 'X');
 
+    /// <summary>EVM (0x...), Solana and Tron addresses: letters and digits only.</summary>
+    public static bool IsWalletAddress(string? address) =>
+        address is { Length: >= 26 and <= 64 } && address.All(char.IsAsciiLetterOrDigit);
+
+    static bool IsShortText(string? text) =>
+        text is { Length: > 0 and <= 32 } && text.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+
     /// <summary>LI.FI's explorer follows every step of a route.</summary>
     public static string ExplorerLink(SwapSourceChain chain, string txHash) => $"https://scan.li.fi/tx/{txHash}";
 
-    async Task Note(string invoiceId, string key, string message)
+    /// <summary>Adds a line to the invoice's log, once per key. False when it was already noted (or the invoice has enough notes).</summary>
+    async Task<bool> Note(string invoiceId, string key, string message)
     {
         var prefix = invoiceId + ":";
         if (Logged.Keys.Count(k => k.StartsWith(prefix, StringComparison.Ordinal)) >= MaxNotesPerInvoice ||
             !Logged.TryAdd(prefix + key, 0))
-            return;
+            return false;
         var logs = new InvoiceLogs();
         logs.Write(message, InvoiceEventData.EventSeverity.Info);
         await invoiceRepository.AddInvoiceLogs(invoiceId, logs);
+        return true;
     }
 }

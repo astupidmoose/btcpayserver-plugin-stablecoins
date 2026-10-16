@@ -63,6 +63,8 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         public string? Error;
         public DateTimeOffset ErrorAt;
         public string? LoggedError;
+        /// <summary>Source and payout transactions already written to the invoice's log.</summary>
+        public readonly HashSet<string> LoggedTxs = new(StringComparer.OrdinalIgnoreCase);
         public Task? Running;
         public DateTimeOffset Touched;
     }
@@ -241,6 +243,8 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
                 (payment.Memo is null ? "" : $" with memo {payment.Memo}") +
                 $". NEAR Intents quote {response.CorrelationId}: {amountOut} satoshis to {btcAddress}, deposit deadline {quote.Deadline:u}. " +
                 $"Unswapped or excess {chain.Ticker} is refunded to {config.RefundAddress(network.Family)}. Quote signature: {response.Signature}");
+            // Support can find the invoice by pasting the deposit address or the quote id into the invoice search.
+            await SearchTerms(invoiceId, payment.Address, response.CorrelationId);
         }
         catch (Exception ex)
         {
@@ -276,6 +280,8 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
             if (updated.Status != payment.Status)
                 await Log(invoiceId, $"{chain.Ticker} deposit to {payment.Address}: {updated.Status}" +
                                      (status.SwapDetails?.RefundReason is { } reason ? $" ({reason})" : ""));
+            await LogTxs(entry, invoiceId, status.SwapDetails?.OriginChainTxHashes, $"Customer's {chain.Ticker} deposit transaction");
+            await LogTxs(entry, invoiceId, status.SwapDetails?.DestinationChainTxHashes, "NEAR Intents' BTC payout transaction");
         }
         catch (OneClickException ex) when (ex.Status == 404)
         {
@@ -319,6 +325,35 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         var value = (decimal)scaled;
         for (var i = 0; i < places; i++) value /= 10m;
         return value;
+    }
+
+    async Task LogTxs(Entry entry, string invoiceId, List<OneClickTxHash>? txs, string what)
+    {
+        foreach (var tx in txs ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(tx.Hash))
+                continue;
+            lock (entry)
+            {
+                if (!entry.LoggedTxs.Add(tx.Hash))
+                    continue;
+            }
+            await Log(invoiceId, $"{what}: {tx.Hash}" + (Uri.TryCreate(tx.ExplorerUrl, UriKind.Absolute, out var url) && url.Scheme == "https" ? $" ({url})" : ""));
+            await SearchTerms(invoiceId, tx.Hash);
+        }
+    }
+
+    async Task SearchTerms(string invoiceId, params string?[] terms)
+    {
+        var list = terms.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t!).ToList();
+        try
+        {
+            await invoiceRepository.AddSearchTerms(invoiceId, list);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not add search terms to invoice {InvoiceId}", invoiceId);
+        }
     }
 
     async Task Log(string invoiceId, string message, InvoiceEventData.EventSeverity severity = InvoiceEventData.EventSeverity.Info)
