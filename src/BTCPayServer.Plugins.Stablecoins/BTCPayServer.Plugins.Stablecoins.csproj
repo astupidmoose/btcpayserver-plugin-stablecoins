@@ -6,8 +6,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <Product>Stablecoins</Product>
-    <Description>Accept stablecoins as native BTCPay payment methods, paid directly to a merchant-controlled wallet. Starts with USDC on Solana via Solana Pay.</Description>
-    <Version>0.1.0</Version>
+    <Description>Take payments from Ethereum, Base, Solana and other chains, settled as BTC or USDC into a wallet the merchant controls. Customers pay with any token through LI.FI, or USDC on Solana directly.</Description>
+    <Version>0.2.0</Version>
   </PropertyGroup>
 
   <!-- Plugin development properties -->

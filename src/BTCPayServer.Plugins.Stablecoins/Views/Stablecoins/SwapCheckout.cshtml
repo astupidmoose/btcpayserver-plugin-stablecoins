@@ -1,0 +1,118 @@
+@using BTCPayServer.Plugins.Stablecoins.Swap
+@model BTCPayServer.Models.InvoicingModels.CheckoutModel
+@{
+    var scriptUrl = Url.Content("~/Resources/js/swappanel.js") + "?v=" + typeof(StablecoinsPlugin).Assembly.GetName().Version;
+}
+
+<template id="@SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName">
+    <div class="payment-box stablecoins-swap">
+        <p class="text-center text-muted mb-3" v-if="swap">
+            Pay with any token on {{ swap.chainName }}. It is swapped to BTC in your wallet and sent straight to this invoice.
+        </p>
+        <div ref="panel" class="stablecoins-swap-panel"></div>
+        <p v-if="state === 'loading'" class="text-center text-muted my-4">Loading wallet options…</p>
+        <div v-if="state === 'error'" class="alert alert-danger mt-3" role="alert">The payment panel could not load: {{ error }}</div>
+        <div v-if="state === 'started'" class="alert alert-info mt-3" role="status">
+            Swap sent. Keep this page open: the invoice updates by itself once the BTC arrives, which can take several minutes.
+        </div>
+        <div v-if="state === 'failed'" class="alert alert-warning mt-3" role="alert">
+            The swap did not complete. Nothing was sent to the invoice; you can try again with another route or token.
+        </div>
+        <div v-if="model.address" class="input-group mt-3">
+            <div class="form-floating" id="Address_@Model.PaymentMethodId">
+                <vc:truncate-center text="model.address" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
+                <label>BTC address receiving the swap</label>
+            </div>
+        </div>
+    </div>
+</template>
+
+<style>
+    .stablecoins-swap-panel { min-height: 3rem; margin: 0 -.5rem; }
+    .stablecoins-swap-panel > div { max-width: 100%; }
+</style>
+
+<script>
+    (function () {
+        const scriptUrl = @Safe.Json(scriptUrl);
+        let loading = null;
+        function loadPanel() {
+            if (window.StablecoinsSwapPanel) return Promise.resolve(window.StablecoinsSwapPanel);
+            if (!loading) {
+                loading = new Promise((resolve, reject) => {
+                    const s = document.createElement('script');
+                    s.src = scriptUrl;
+                    s.async = true;
+                    s.onload = () => window.StablecoinsSwapPanel ? resolve(window.StablecoinsSwapPanel) : reject(new Error('panel script did not initialise'));
+                    s.onerror = () => { loading = null; reject(new Error('could not download the panel script')); };
+                    document.head.appendChild(s);
+                });
+            }
+            return loading;
+        }
+        // Ask LI.FI for slightly more than is due, rounded up to the satoshi, so bridge rounding never leaves the invoice partially paid.
+        function btcToRequest(due, bufferPercent) {
+            const value = parseFloat(String(due).replace(/[^\d.]/g, ''));
+            if (!(value > 0)) return null;
+            const sats = Math.ceil(value * 1e8 * (1 + (Number(bufferPercent) || 0) / 100));
+            return (sats / 1e8).toFixed(8);
+        }
+        function appearance() {
+            const theme = document.documentElement.getAttribute('data-btcpay-theme');
+            return theme === 'dark' || theme === 'light' ? theme : 'auto';
+        }
+
+        Vue.component(@Safe.Json(SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName), {
+            props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
+            template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName),
+            data () {
+                return { state: 'loading', error: null, mountedDue: null, mountedAddress: null };
+            },
+            computed: {
+                swap () { return this.model.stablecoinsSwap; }
+            },
+            watch: {
+                // The panel quotes the amount due; refresh it after a partial payment, but never mid-swap.
+                'model.due' () { if (this.state === 'ready' || this.state === 'failed') this.render(); },
+                'model.address' () { if (this.state !== 'started') this.render(); }
+            },
+            mounted () { this.render(); },
+            beforeDestroy () {
+                if (window.StablecoinsSwapPanel && this.$refs.panel) window.StablecoinsSwapPanel.unmount(this.$refs.panel);
+            },
+            methods: {
+                async render () {
+                    const swap = this.swap;
+                    const btcDue = btcToRequest(this.model.due, swap && swap.bufferPercent);
+                    if (!swap || !btcDue) { this.state = 'idle'; return; }
+                    if (this.mountedDue === btcDue && this.mountedAddress === swap.btcAddress) return;
+                    try {
+                        const panel = await loadPanel();
+                        this.mountedDue = btcDue;
+                        this.mountedAddress = swap.btcAddress;
+                        panel.mount(this.$refs.panel, {
+                            integrator: swap.integrator,
+                            apiKey: swap.apiKey,
+                            fee: swap.fee,
+                            walletConnectProjectId: swap.walletConnectProjectId,
+                            fromChain: swap.fromChain,
+                            btcAddress: swap.btcAddress,
+                            btcDue,
+                            invoiceLabel: swap.invoiceLabel,
+                            appearance: appearance(),
+                            primaryColor: getComputedStyle(document.documentElement).getPropertyValue('--btcpay-primary').trim() || undefined,
+                            onEvent: (kind) => {
+                                if (kind === 'started') this.state = 'started';
+                                else if (kind === 'failed') this.state = 'failed';
+                            }
+                        });
+                        if (this.state !== 'started') this.state = 'ready';
+                    } catch (e) {
+                        this.state = 'error';
+                        this.error = e && e.message ? e.message : String(e);
+                    }
+                }
+            }
+        });
+    })();
+</script>

@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Linq;
 using BTCPayServer.Abstractions.Contracts;
 using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Configuration;
@@ -8,6 +9,7 @@ using BTCPayServer.Payments;
 using BTCPayServer.Plugins.Stablecoins.Payments;
 using BTCPayServer.Plugins.Stablecoins.Services;
 using BTCPayServer.Plugins.Stablecoins.Solana;
+using BTCPayServer.Plugins.Stablecoins.Swap;
 using BTCPayServer.Services;
 using BTCPayServer.Services.Rates;
 using Microsoft.Extensions.Configuration;
@@ -78,7 +80,26 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
         services.AddSingleton<SolanaUsdcListener>();
         services.AddHostedService(p => p.GetRequiredService<SolanaUsdcListener>());
 
+        // Pay a BTC invoice from another chain through LI.FI: one payment method per source chain,
+        // each paying a fresh address from the store's own BTC wallet.
+        var btcTxLink = networkType == ChainName.Mainnet ? "https://mempool.space/tx/{0}" : "https://mempool.space/testnet/tx/{0}";
+        foreach (var source in SwapSourceChain.All)
+        {
+            services.AddSingleton(provider => ActivatorUtilities.CreateInstance<SwapToBtcPaymentMethodHandler>(provider, source));
+            services.AddSingleton<IPaymentMethodHandler>(provider => provider.GetServices<SwapToBtcPaymentMethodHandler>().Single(h => h.Chain == source));
+            services.AddSingleton<ICheckoutModelExtension>(provider =>
+                new SwapToBtcCheckoutModelExtension(provider.GetServices<SwapToBtcPaymentMethodHandler>().Single(h => h.Chain == source)));
+            services.AddSingleton<IPaymentLinkExtension>(provider =>
+                new SwapToBtcPaymentLinkExtension(provider.GetServices<SwapToBtcPaymentMethodHandler>().Single(h => h.Chain == source)));
+            services.AddDefaultPrettyName(source.PaymentMethodId, source.Name);
+            services.AddTransactionLinkProvider(source.PaymentMethodId, new DefaultTransactionLinkProvider(btcTxLink));
+        }
+        services.AddSingleton<SwapToBtcListener>();
+        services.AddHostedService(p => p.GetRequiredService<SwapToBtcListener>());
+
         services.AddUIExtension("store-wallets-nav", $"{ViewsDirectory}/StoreNavExtension.cshtml");
         services.AddUIExtension("store-invoices-payments", $"{ViewsDirectory}/ViewSolanaUsdcPaymentData.cshtml");
+        services.AddUIExtension("store-invoices-payments", $"{ViewsDirectory}/ViewSwapToBtcPaymentData.cshtml");
+        services.AddUIExtension("checkout-end", $"{ViewsDirectory}/SwapCheckout.cshtml");
     }
 }

@@ -1,0 +1,92 @@
+@using BTCPayServer.Abstractions.Models
+@using BTCPayServer.Plugins.Stablecoins.Controllers
+@model SwapSettingsViewModel
+@{
+    ViewData.SetLayoutModel(new LayoutModel("STABLECOINS-SWAP", "Pay from other chains"));
+    Layout = "_Layout";
+    var storeId = Context.GetRouteValue("storeId");
+}
+
+<partial name="_StatusMessage" />
+
+<div class="sticky-header">
+    <h2>@ViewData["Title"]</h2>
+</div>
+
+<div class="row">
+    <div class="col-xl-8 col-xxl-constrain">
+        <p class="text-secondary">
+            Each chain below becomes its own payment method, so WooCommerce can list it as a separate option.
+            The customer pays with any token on that chain in their own wallet, and
+            <a href="https://li.fi" target="_blank" rel="noreferrer noopener">LI.FI</a> routes it through a bridge that pays native BTC
+            to a fresh address from this store's BTC wallet. Invoices are priced and settled in BTC, and BTCPay never holds the customer's tokens.
+        </p>
+        @if (!Model.HasBtcWallet)
+        {
+            <div class="alert alert-warning" role="alert">
+                This store has no BTC on-chain wallet yet. <a asp-controller="UIStores" asp-action="SetupWallet" asp-route-storeId="@storeId" asp-route-cryptoCode="BTC">Set one up</a> first: the swapped BTC is paid into it.
+            </div>
+        }
+        @if (!ViewContext.ModelState.IsValid)
+        {
+            <div asp-validation-summary="All" class="text-danger"></div>
+        }
+        <form method="post" asp-action="SwapSettings" asp-route-storeId="@storeId">
+            <h4 class="mt-4 mb-3">Chains customers can pay from</h4>
+            <div class="form-group">
+                @for (var i = 0; i < Model.Chains.Count; i++)
+                {
+                    <div class="d-flex align-items-center mb-2">
+                        <input type="hidden" asp-for="Chains[i].Code" />
+                        <input asp-for="Chains[i].Enabled" type="checkbox" class="btcpay-toggle me-3" />
+                        <img src="~/@Model.Chains[i].Image" alt="" width="20" height="20" class="me-2" />
+                        <label asp-for="Chains[i].Enabled" class="form-check-label me-2">@Model.Chains[i].Name</label>
+                        <code class="text-muted small">@Model.Chains[i].PaymentMethodId</code>
+                    </div>
+                }
+                <div class="form-text">
+                    In WooCommerce (BTCPay plugin, "Separate payment gateways"), each enabled chain shows up as its own gateway, named by the code above.
+                    Rename it there, for example to "Ethereum".
+                </div>
+            </div>
+
+            <h4 class="mt-4 mb-3">LI.FI</h4>
+            <div class="form-group">
+                <label asp-for="Integrator" class="form-label"></label>
+                <input asp-for="Integrator" class="form-control" autocomplete="off" spellcheck="false" required maxlength="23" />
+                <span asp-validation-for="Integrator" class="text-danger"></span>
+                <div class="form-text">The integration name you registered at <a href="https://portal.li.fi" target="_blank" rel="noreferrer noopener">portal.li.fi</a>. Fees are only collected for registered names.</div>
+            </div>
+            <div class="form-group">
+                <label asp-for="ApiKey" class="form-label"></label>
+                <input asp-for="ApiKey" class="form-control font-monospace" autocomplete="off" spellcheck="false" />
+                <div class="form-text">Raises LI.FI's rate limits. It is visible in the checkout page's source, as LI.FI's widget requires.</div>
+            </div>
+            <div class="form-group">
+                <label asp-for="FeePercent" class="form-label"></label>
+                <input asp-for="FeePercent" type="number" min="0" max="9.99" step="0.01" class="form-control" />
+                <span asp-validation-for="FeePercent" class="text-danger"></span>
+                <div class="form-text">Added to the customer's swap and paid to your LI.FI fee wallet, minus LI.FI's share. 0 for none.</div>
+            </div>
+            <div class="form-group">
+                <label asp-for="BufferPercent" class="form-label"></label>
+                <input asp-for="BufferPercent" type="number" min="0" max="5" step="0.1" class="form-control" />
+                <span asp-validation-for="BufferPercent" class="text-danger"></span>
+                <div class="form-text">The panel asks LI.FI for this much more BTC than is due, so bridge rounding does not leave invoices partially paid. Overpayments show on the invoice as usual.</div>
+            </div>
+            <div class="form-group">
+                <label asp-for="WalletConnectProjectId" class="form-label"></label>
+                <input asp-for="WalletConnectProjectId" class="form-control font-monospace" autocomplete="off" spellcheck="false" />
+                <div class="form-text">From <a href="https://cloud.reown.com" target="_blank" rel="noreferrer noopener">Reown</a>. Lets customers connect mobile EVM wallets by QR code. Browser wallets work without it.</div>
+            </div>
+
+            <div class="alert alert-info" role="note">
+                Bridging to BTC usually takes several minutes and can take longer. Give invoices enough time
+                (Store settings, Checkout, "Invoice expires if the full amount has not been paid after", for example 60 minutes),
+                and consider a small payment tolerance for underpaid swaps.
+            </div>
+
+            <button type="submit" class="btn btn-primary" id="Save">Save</button>
+        </form>
+    </div>
+</div>
