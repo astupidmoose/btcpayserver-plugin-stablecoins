@@ -1,0 +1,276 @@
+@using System.Collections.Generic
+@using System.Linq
+@using BTCPayServer.Plugins.Stablecoins.Swap
+@model BTCPayServer.Models.InvoicingModels.CheckoutModel
+@{
+    var version = typeof(StablecoinsPlugin).Assembly.GetName().Version?.ToString();
+    // When this invoice can only be paid from other chains, other plugins' extra tabs (Trocador's "Altcoins",
+    // SideShift...) do not apply: they pay the invoice's BTC, which the customer never sees here.
+    var onlySwaps = Model.AvailablePaymentMethods.Where(pm => pm.Displayed).All(pm => SwapSourceChain.Find(pm.PaymentMethodId) is not null);
+    var scriptUrls = new Dictionary<string, string>
+    {
+        ["evm"] = Url.Content("~/Resources/js/swappanel-evm.js") + "?v=" + version,
+        ["solana"] = Url.Content("~/Resources/js/swappanel-solana.js") + "?v=" + version,
+        ["tron"] = Url.Content("~/Resources/js/swappanel-tron.js") + "?v=" + version
+    };
+}
+
+<template id="@SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName">
+    <div class="payment-box stablecoins-swap" v-if="swap">
+        <p class="text-center text-muted mb-3" v-if="swap.active">
+            Pay with any token you hold on {{ swap.chainName }}.
+        </p>
+        <div ref="panel" class="stablecoins-swap-panel"></div>
+        <p v-if="state === 'loading'" class="text-center text-muted my-4">Loading wallet options…</p>
+        <div v-if="state === 'error'" class="alert alert-danger mt-3" role="alert">The payment panel could not load: {{ error }}</div>
+        <stablecoins-exchange-buttons :model="model"></stablecoins-exchange-buttons>
+    </div>
+</template>
+
+<template id="@SwapToBtcCheckoutModelExtension.DepositCheckoutBodyComponentName">
+    <div>
+        <stablecoins-network-picker :model="model"></stablecoins-network-picker>
+        <component :is="'@SwapToBtcCheckoutModelExtension.BitcoinCheckoutBodyComponentName'" :model="model"></component>
+        <stablecoins-exchange-buttons :model="model"></stablecoins-exchange-buttons>
+    </div>
+</template>
+
+@* "Send USDC from an exchange" under a token checkout's wallet panel, and the way back to it. *@
+<template id="stablecoins-exchange-buttons">
+    <div class="d-flex flex-column gap-2 mt-4" v-if="x && x.options && x.options.length">
+        <button type="button" v-for="o in x.options" :key="o.code" class="btn" :disabled="busy"
+                :class="x.chosen === o.code ? 'btn-primary' : 'btn-outline-secondary'"
+                v-on:click.prevent="choose(o.code)" v-text="o.label"></button>
+        <button type="button" v-if="x.chosen" class="btn btn-link" :disabled="busy" v-on:click.prevent="choose(null)">Pay from a wallet instead</button>
+    </div>
+</template>
+
+<template id="stablecoins-network-picker">
+    <div class="stablecoins-network mb-3" v-if="d.state !== 'done'">
+        <div class="form-group mb-3" v-if="!d.fixed && d.state !== 'received'">
+            <label class="form-label" for="StablecoinsNetwork">Network</label>
+            <select id="StablecoinsNetwork" class="form-select" :value="d.network || ''" :disabled="busy || d.state === 'incomplete'" v-on:change="choose($event.target.value)">
+                <option value="" disabled>Choose the network you send from</option>
+                <option v-for="n in d.networks" :key="n.code" :value="n.code">{{ n.name }}</option>
+            </select>
+        </div>
+        <p v-if="d.state === 'choosenetwork'" class="text-muted small text-center mb-0">
+            Paying from an exchange? Pick the same network in its withdrawal form.
+        </p>
+        <div v-else-if="d.state === 'preparing' || busy" class="text-center">
+            <span class="spinner-border spinner-border-sm text-muted" role="status"></span>
+            <p class="text-muted mt-2 mb-0">Getting your {{ d.symbol }} payment address…</p>
+        </div>
+        <div v-else-if="d.state === 'ready'" class="alert alert-warning small mb-0" role="note">
+            Send only {{ d.symbol }} on {{ d.networkName }} to this address, and send the full amount.
+            If your exchange takes its withdrawal fee out of the amount, add the fee.
+            <span v-if="d.memo"><br>Memo: <strong>{{ d.memo }}</strong></span>
+        </div>
+        <div v-else-if="d.state === 'incomplete'" class="alert alert-warning small mb-0" role="alert">
+            Part of the payment arrived. Send the remaining <strong>{{ d.remaining }} {{ d.symbol }}</strong> to the same address on {{ d.networkName }}.
+        </div>
+        <div v-else-if="d.state === 'received'" class="text-center">
+            <p class="fw-semibold mb-1">{{ d.symbol }} payment received</p>
+            <p class="text-muted small mb-0">
+                Keep this page open. It updates by itself once the payment is confirmed<span v-if="d.minutes">, usually within {{ d.minutes }} minutes</span>.
+            </p>
+        </div>
+        <div v-else-if="d.state === 'refunded'" class="alert alert-danger small mb-0" role="alert">
+            This payment could not be completed. Please contact the store about a refund.
+        </div>
+        <div v-else-if="d.state === 'failed' || error" class="alert alert-warning small mb-0" role="alert">{{ error || d.error }}</div>
+    </div>
+</template>
+
+<style>
+    .stablecoins-swap-panel { min-height: 3rem; }
+    .stablecoins-tokens { max-height: 16rem; overflow-y: auto; }
+</style>
+
+<script>
+    (function () {
+        @if (onlySwaps)
+        {
+            @:document.querySelectorAll('.payment-methods-wrapper .btcpay-pills > a:not([v-for])').forEach(e => e.remove());
+        }
+        // BTCPay 2.4.5's checkout shows "Tax included" in View Details, but its translations lack the key,
+        // so it shows as "tax_included". Fill it in (in any language that lacks it) until BTCPay ships it.
+        if (window.i18next) {
+            const missing = { tax_included: 'Tax included' };
+            const fill = () => {
+                const lng = i18next.language;
+                if (!lng) return;
+                for (const [key, text] of Object.entries(missing))
+                    if (!i18next.exists(key)) i18next.addResource(lng, 'translation', key, text);
+            };
+            i18next.on('loaded', fill);
+            i18next.on('languageChanged', fill);
+            fill();
+        }
+        const scriptUrls = @Safe.Json(scriptUrls);
+        const loading = {};
+        // Each wallet family (EVM, Solana, Tron) is its own bundle; load only the one this chain needs.
+        function familyOf(chainId) {
+            return chainId === @SwapSourceChain.SolanaLifiChainId ? 'solana' : chainId === @SwapSourceChain.TronLifiChainId ? 'tron' : 'evm';
+        }
+        function loadPanel(family) {
+            const ready = () => window.StablecoinsSwapPanels && window.StablecoinsSwapPanels[family];
+            if (ready()) return Promise.resolve(ready());
+            if (!loading[family]) {
+                loading[family] = new Promise((resolve, reject) => {
+                    const s = document.createElement('script');
+                    s.src = scriptUrls[family];
+                    s.async = true;
+                    s.onload = () => ready() ? resolve(ready()) : reject(new Error('panel script did not initialise'));
+                    s.onerror = () => { delete loading[family]; reject(new Error('could not download the panel script')); };
+                    document.head.appendChild(s);
+                });
+            }
+            return loading[family];
+        }
+        // Ask LI.FI for slightly more than is due, rounded up to the satoshi, so bridge rounding never leaves the invoice partially paid.
+        function btcToRequest(due, bufferPercent) {
+            const value = parseFloat(String(due).replace(/[^\d.]/g, ''));
+            if (!(value > 0)) return null;
+            const sats = Math.ceil(value * 1e8 * (1 + (Number(bufferPercent) || 0) / 100));
+            return (sats / 1e8).toFixed(8);
+        }
+        function reportSource(url, txHash, chainId) {
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ txHash, chainId })
+            }).then(r => r.ok);
+        }
+        function appearance() {
+            const theme = document.documentElement.getAttribute('data-btcpay-theme');
+            return theme === 'dark' || theme === 'light' ? theme : 'auto';
+        }
+
+        Vue.component(@Safe.Json(SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName), {
+            props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
+            template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName),
+            data () {
+                return { state: 'loading', error: null, mounted: null, panel: null, sent: false };
+            },
+            computed: {
+                swap () { return this.model.stablecoinsSwap; }
+            },
+            watch: {
+                // The panel quotes what is due; refresh it after a partial payment, but never once a payment was sent.
+                'swap.btcDue' () { if (!this.sent) this.render(); }
+            },
+            mounted () { this.render(); },
+            beforeDestroy () {
+                if (this.panel && this.$refs.panel) this.panel.unmount(this.$refs.panel);
+            },
+            methods: {
+                async render () {
+                    const swap = this.swap;
+                    const btcDue = swap && swap.active ? btcToRequest(swap.btcDue, swap.bufferPercent) : null;
+                    if (!btcDue) {
+                        if (this.panel && this.$refs.panel) this.panel.unmount(this.$refs.panel);
+                        this.state = 'idle';
+                        return;
+                    }
+                    const key = `${btcDue}:${swap.btcAddress}`;
+                    if (this.mounted === key) return;
+                    try {
+                        const panel = await loadPanel(familyOf(Number(swap.fromChain)));
+                        this.panel = panel;
+                        this.mounted = key;
+                        panel.mount(this.$refs.panel, {
+                            integrator: swap.integrator,
+                            apiKey: swap.apiKey,
+                            fee: swap.fee,
+                            walletConnectProjectId: swap.walletConnectProjectId,
+                            fromChain: swap.fromChain,
+                            btcAddress: swap.btcAddress,
+                            btcDue,
+                            appearance: appearance(),
+                            primaryColor: getComputedStyle(document.documentElement).getPropertyValue('--btcpay-primary').trim() || undefined,
+                            onEvent: (kind, data) => {
+                                if (kind === 'tx' && data && data.txHash) {
+                                    this.sent = true;
+                                    reportSource(swap.sourceUrl, data.txHash, data.chainId).catch(() => {});
+                                }
+                            }
+                        });
+                        this.state = 'ready';
+                    } catch (e) {
+                        this.state = 'error';
+                        this.error = e && e.message ? e.message : String(e);
+                    }
+                }
+            }
+        });
+
+        Vue.component(@Safe.Json(SwapToBtcCheckoutModelExtension.DepositCheckoutBodyComponentName), {
+            props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
+            template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.DepositCheckoutBodyComponentName)
+        });
+
+        Vue.component('stablecoins-exchange-buttons', {
+            props: ['model'],
+            template: '#stablecoins-exchange-buttons',
+            data () { return { busy: false }; },
+            computed: {
+                x () { return this.model.@SwapToBtcCheckoutModelExtension.ExchangeDataKey; }
+            },
+            methods: {
+                async choose (option) {
+                    if (this.x.chosen === option) return;
+                    this.busy = true;
+                    try {
+                        await fetch(this.x.chooseUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                            body: JSON.stringify({ option })
+                        });
+                        if (this.$root && this.$root.fetchData) await this.$root.fetchData();
+                    } finally {
+                        this.busy = false;
+                    }
+                }
+            }
+        });
+
+        Vue.component('stablecoins-network-picker', {
+            props: ['model'],
+            template: '#stablecoins-network-picker',
+            data () { return { busy: false, error: null, timer: null }; },
+            computed: {
+                d () { return this.model.stablecoinsDeposit; }
+            },
+            // The address is prepared and the deposit followed in the background; ask for the updated invoice while needed.
+            mounted () {
+                this.timer = setInterval(() => {
+                    const state = this.d && this.d.state;
+                    if (state && state !== 'done' && state !== 'choosenetwork' && this.$root && this.$root.fetchData)
+                        this.$root.fetchData();
+                }, 5000);
+            },
+            beforeDestroy () { clearInterval(this.timer); },
+            methods: {
+                async choose (network) {
+                    if (!network) return;
+                    this.busy = true;
+                    this.error = null;
+                    try {
+                        const r = await fetch(this.d.selectUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                            body: JSON.stringify({ network })
+                        });
+                        if (!r.ok) this.error = 'That network is not available right now. Please choose another one.';
+                        if (this.$root && this.$root.fetchData) await this.$root.fetchData();
+                    } catch (e) {
+                        this.error = 'Could not reach the store. Please try again.';
+                    } finally {
+                        this.busy = false;
+                    }
+                }
+            }
+        });
+    })();
+</script>

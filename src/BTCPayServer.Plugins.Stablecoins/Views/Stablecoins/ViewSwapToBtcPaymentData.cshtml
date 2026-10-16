@@ -1,6 +1,5 @@
-@using System.Globalization
 @using BTCPayServer.Payments
-@using BTCPayServer.Plugins.Stablecoins.Payments
+@using BTCPayServer.Plugins.Stablecoins.Swap
 @using BTCPayServer.Services
 @using BTCPayServer.Services.Invoices
 @inject DisplayFormatter DisplayFormatter
@@ -9,39 +8,42 @@
 @model BTCPayServer.Models.InvoicingModels.InvoiceDetailsModel
 @{
     var payments = Model.Payments
-        .Where(p => p.PaymentMethodId == StablecoinsPlugin.SolanaUsdcPaymentMethodId)
+        .Where(p => SwapSourceChain.Find(p.PaymentMethodId) is not null && Handlers.Support(p.PaymentMethodId))
         .Select(p =>
         {
-            var handler = (SolanaUsdcPaymentMethodHandler)Handlers[p.PaymentMethodId];
+            var handler = (SwapToBtcPaymentMethodHandler)Handlers[p.PaymentMethodId];
             var data = handler.ParsePaymentDetails(p.Details);
             return new
             {
                 Payment = p,
+                Chain = handler.Chain,
                 Data = data,
-                Link = TransactionLinkProviders.GetTransactionLink(p.PaymentMethodId, data.Signature)
+                Link = TransactionLinkProviders.GetTransactionLink(p.PaymentMethodId, data.Outpoint)
             };
         }).ToList();
 }
 @if (payments.Any())
 {
     <section>
-        <h5>USDC (Solana) payments</h5>
+        <h5>BTC received from swaps</h5>
         <table class="table table-hover">
             <thead>
             <tr>
-                <th>Transaction</th>
                 <th>Paid from</th>
-                <th>Commitment</th>
-                <th class="text-end">Paid</th>
+                <th>BTC transaction</th>
+                <th>Confirmations</th>
+                <th class="text-end">Received</th>
             </tr>
             </thead>
             <tbody>
             @foreach (var p in payments)
             {
                 <tr>
-                    <td><vc:truncate-center text="@p.Data.Signature" link="@p.Link" classes="truncate-center-id" /></td>
-                    <td><vc:truncate-center text="@(p.Data.Payer ?? "")" classes="truncate-center-id" /></td>
-                    <td>@(p.Data.ConfirmationStatus ?? "unknown")</td>
+                    <td>
+                        @p.Chain.Name
+                    </td>
+                    <td><vc:truncate-center text="@p.Data.Outpoint" link="@p.Link" classes="truncate-center-id" /></td>
+                    <td>@p.Data.ConfirmationCount</td>
                     <td class="payment-value text-end text-nowrap">
                         <span data-sensitive class="text-success">@DisplayFormatter.Currency(p.Payment.Value, p.Payment.Currency)</span>
                     </td>

@@ -4,20 +4,20 @@
 @inject IScopeProvider ScopeProvider
 @{
     var storeId = ScopeProvider.GetCurrentStoreId();
-    var isActive = !string.IsNullOrEmpty(storeId) &&
-                   ViewContext.RouteData.Values.TryGetValue("Controller", out var controller) && controller is not null &&
-                   nameof(UIUsdcStoreController).StartsWith(controller.ToString() ?? string.Empty, StringComparison.InvariantCultureIgnoreCase);
+    ViewContext.RouteData.Values.TryGetValue("Controller", out var controller);
+    var isActive = !string.IsNullOrEmpty(storeId) && controller?.ToString() is { Length: > 0 } name &&
+                   nameof(UISwapStoreController).StartsWith(name, StringComparison.InvariantCultureIgnoreCase);
 }
 @if (!string.IsNullOrEmpty(storeId))
 {
     <li class="nav-item" permission="@Policies.CanModifyStoreSettings">
         <a class="nav-link @(isActive ? "active" : "")"
            asp-area=""
-           asp-controller="UIUsdcStore"
-           asp-action="SolanaSettings"
+           asp-controller="UISwapStore"
+           asp-action="SwapSettings"
            asp-route-storeId="@storeId">
-            <img src="~/Resources/usdc.svg" alt="" width="18" height="18" class="me-2" />
-            <span>USDC (Solana)</span>
+            <img src="~/Resources/chains/ethereum.svg" alt="" width="18" height="18" class="me-2" />
+            <span>Pay from other chains</span>
         </a>
     </li>
 }
