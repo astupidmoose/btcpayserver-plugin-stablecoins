@@ -37,13 +37,17 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
         services.AddSingleton(provider => new ThornodeClient(
             provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(ThornodeClient.HttpClientName)));
         services.AddSingleton<ThorQuoteService>();
+        services.AddHttpClient(MemolessClient.HttpClientName);
+        services.AddSingleton(provider => new MemolessClient(
+            provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(MemolessClient.HttpClientName)));
+        services.AddSingleton<ThorDepositService>();
 
         var btcTxLink = networkType == ChainName.Mainnet ? "https://mempool.space/tx/{0}" : "https://mempool.space/testnet/tx/{0}";
         foreach (var source in SwapSourceChain.All)
         {
             services.AddSingleton(provider => ActivatorUtilities.CreateInstance<SwapToBtcPaymentMethodHandler>(provider, source));
             services.AddSingleton<IPaymentMethodHandler>(provider => Handler(provider, source));
-            services.AddSingleton<ICheckoutModelExtension>(provider => new SwapToBtcCheckoutModelExtension(Handler(provider, source)));
+            services.AddSingleton<ICheckoutModelExtension>(provider => ActivatorUtilities.CreateInstance<SwapToBtcCheckoutModelExtension>(provider, Handler(provider, source)));
             services.AddSingleton<IPaymentLinkExtension>(provider => new SwapToBtcPaymentLinkExtension(Handler(provider, source)));
             services.AddDefaultPrettyName(source.PaymentMethodId, source.Name);
             services.AddTransactionLinkProvider(source.PaymentMethodId, new DefaultTransactionLinkProvider(btcTxLink));

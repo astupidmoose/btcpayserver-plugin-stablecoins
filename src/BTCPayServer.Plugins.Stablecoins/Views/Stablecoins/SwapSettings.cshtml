@@ -72,8 +72,9 @@
 
             <h4 class="mt-5 mb-2">Native coins, through THORChain</h4>
             <p class="text-secondary">
-                The customer sends the coin from their own wallet to a <a href="https://thorchain.org" target="_blank" rel="noreferrer noopener">THORChain</a> vault with a memo that names
-                the invoice's BTC address. Their wallet must be able to add that memo.
+                The checkout looks like a normal BTCPay invoice in that coin: a QR code, an address and an exact amount, with no memo.
+                <a href="https://thorchain.org" target="_blank" rel="noreferrer noopener">THORChain</a> recognises the payment by its exact amount
+                (a memoless deposit) and swaps it to BTC for this invoice. Customers never see THORChain or BTC.
             </p>
             <div class="form-group">
                 @for (var i = 0; i < Model.Chains.Count; i++)

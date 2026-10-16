@@ -20,75 +20,18 @@ using Microsoft.Extensions.Logging;
 namespace BTCPayServer.Plugins.Stablecoins.Controllers;
 
 /// <summary>
-/// Endpoints the swap checkouts call. Public like the checkout itself: they only quote swaps to the
-/// invoice's own BTC address for the amount still due, and only add notes to the invoice's log.
+/// The endpoint the token checkout calls. Public like the checkout itself: it only adds notes to the invoice's log.
 /// </summary>
 [AllowAnonymous]
 [IgnoreAntiforgeryToken]
 [Route("plugins/stablecoins")]
 public class UISwapCheckoutController(
     InvoiceRepository invoiceRepository,
-    StoreRepository storeRepository,
-    PaymentMethodHandlerDictionary handlers,
-    ThorQuoteService quotes,
     ILogger<UISwapCheckoutController> logger) : Controller
 {
     // Keeps one invoice from filling its log: a handful of source transactions and quotes is plenty.
     static readonly ConcurrentDictionary<string, byte> Logged = new();
     const int MaxNotesPerInvoice = 10;
-
-    /// <summary>The THORChain deposit for an invoice: how much of the coin to send, to which vault, with which memo.</summary>
-    [HttpGet("thorchain/{invoiceId}/{paymentMethodId}/deposit")]
-    public async Task<IActionResult> Deposit(string invoiceId, string paymentMethodId, CancellationToken cancellationToken)
-    {
-        if (!PaymentMethodId.TryParse(paymentMethodId, out var pmi) ||
-            SwapSourceChain.Find(pmi) is not { Provider: SwapProvider.Thorchain } chain ||
-            !handlers.TryGetValue(pmi, out var h) || h is not SwapToBtcPaymentMethodHandler handler)
-            return NotFound();
-        var invoice = await invoiceRepository.GetInvoice(invoiceId);
-        if (invoice?.GetPaymentPrompt(pmi) is not { Activated: true, Destination: { } address } prompt)
-            return NotFound();
-        if (invoice.Status != InvoiceStatus.New)
-            return Json(new { error = "This invoice can no longer be paid." });
-        var due = prompt.Calculate().Due;
-        if (due <= 0m)
-            return Json(new { error = "Nothing is due on this invoice." });
-
-        var store = await storeRepository.FindStore(invoice.StoreId);
-        var configToken = store?.GetPaymentMethodConfig(pmi);
-        var config = configToken is null ? new SwapToBtcPaymentMethodConfig() : handler.ParsePaymentMethodConfig(configToken);
-        try
-        {
-            var deposit = await quotes.GetDeposit(chain, config, address, due, cancellationToken);
-            var amount = deposit.Amount.ToString(CultureInfo.InvariantCulture);
-            await Note(invoiceId, $"quote:{deposit.InboundAddress}:{deposit.Memo}:{amount}",
-                $"THORChain quote for {chain.Name}: send {amount} {deposit.Ticker} to {deposit.InboundAddress} with memo {deposit.Memo}, " +
-                $"valid until {deposit.Expiry:u}. Expected {ThornodeClient.FromUnits(deposit.ExpectedBtcOutUnits)} BTC to {address}.");
-            return Json(new
-            {
-                ticker = deposit.Ticker,
-                amount,
-                inboundAddress = deposit.InboundAddress,
-                memo = deposit.Memo,
-                memoField = chain.MemoField,
-                expectedBtc = ThornodeClient.FromUnits(deposit.ExpectedBtcOutUnits).ToString(CultureInfo.InvariantCulture),
-                expiry = deposit.Expiry.ToUnixTimeSeconds(),
-                totalSwapSeconds = deposit.TotalSwapSeconds,
-                warning = deposit.Warning,
-                // Wallets do not carry the memo in a payment URI, so the QR only fills in address and amount.
-                paymentUri = chain.UriScheme is { } scheme ? $"{scheme}:{deposit.InboundAddress}?amount={amount}" : deposit.InboundAddress
-            });
-        }
-        catch (ThornodeException ex)
-        {
-            return Json(new { error = ex.Message });
-        }
-        catch (System.Net.Http.HttpRequestException ex)
-        {
-            logger.LogWarning(ex, "THORNode unreachable while quoting invoice {InvoiceId}", invoiceId);
-            return Json(new { error = "THORChain could not be reached. Try again in a moment." });
-        }
-    }
 
     public class SourceTransaction
     {
@@ -97,7 +40,7 @@ public class UISwapCheckoutController(
     }
 
     /// <summary>
-    /// The checkout reports the customer's own transaction (signed in the LI.FI panel, or pasted for THORChain),
+    /// The checkout reports the customer's own transaction (signed in the wallet panel),
     /// so support can follow a swap that is slow, refunded or stuck from the invoice page.
     /// </summary>
     [HttpPost("swaps/{invoiceId}/{paymentMethodId}/source")]

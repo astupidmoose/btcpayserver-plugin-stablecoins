@@ -1,88 +1,319 @@
-// Shared core of the swap panel bundles (evm.jsx, solana.jsx, tron.jsx).
-// Swap panel for BTCPay checkout: pay a BTC invoice from tokens on another chain.
-// LI.FI quotes the exact BTC still due, the customer signs in their own wallet,
-// and the BTC is delivered by LI.FI's bridges straight to the invoice's own
-// BTC address. BTCPay then sees an ordinary on-chain payment.
+// Shared core of the payment panel bundles (evm.jsx, solana.jsx, tron.jsx).
+// The customer sees a plain token payment: connect a wallet, pick one of their
+// tokens on this chain, and pay the exact amount shown. Behind it, LI.FI quotes
+// what that token must be to deliver the BTC still due, and its bridges deliver
+// the BTC to the invoice's own address. BTC never appears in this panel.
 import { createRoot } from 'react-dom/client';
-import { ChainType, LiFiWidget, useWidgetEvents, WidgetEvent } from '@lifi/widget';
-import { useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { createTheme, ThemeProvider } from '@mui/material/styles';
+import {
+  convertQuoteToRoute,
+  createClient,
+  executeRoute,
+  formatUnits,
+  getChains,
+  getQuote,
+  getTokenBalances,
+  getTokens,
+} from '@lifi/sdk';
+import { useSDKProviders } from '@lifi/widget-provider';
+import { useAccount, useWalletMenu, WalletManagementProviders } from '@lifi/wallet-management';
 
 export const BTC_CHAIN_ID = 20000000000001;
 export const BTC_TOKEN = 'bitcoin';
 export const SOLANA_CHAIN_ID = 1151111081099710;
 export const TRON_CHAIN_ID = 728126428;
 
-function Events({ onEvent }) {
-  const emitter = useWidgetEvents();
+// A bridge may deliver slightly less than quoted if prices move before it runs.
+// Accept a re-quote down to this share of the BTC requested; the store's payment
+// tolerance covers the rest. Anything worse stops before the customer signs.
+const MIN_ACCEPTED_OUTPUT = 0.99;
+const QUOTE_REFRESH_MS = 45_000;
+const MIN_BALANCE_USD = 0.5;
+
+/** BTC (decimal string) to satoshis (string). */
+export function toSats(btc) {
+  const [whole, frac = ''] = String(btc).split('.');
+  return (BigInt(whole || '0') * 100000000n + BigInt((frac + '00000000').slice(0, 8))).toString();
+}
+
+/** Display amount: up to 6 significant decimals, never rounded below what is needed. */
+export function formatAmount(units, decimals) {
+  const value = formatUnits(BigInt(units), decimals);
+  const [whole, frac = ''] = value.split('.');
+  if (!frac) return whole;
+  const keep = whole === '0' ? Math.max(6, frac.search(/[1-9]/) + 4) : 6;
+  if (frac.length <= keep) return `${whole}.${frac}`.replace(/\.?0+$/, '');
+  // Round up: the customer must never be shown less than the quote needs.
+  const rounded = (BigInt(`${whole}${frac.slice(0, keep)}`) + 1n).toString().padStart(keep + 1, '0');
+  const w = rounded.slice(0, rounded.length - keep) || '0';
+  return `${w}.${rounded.slice(-keep)}`.replace(/\.?0+$/, '');
+}
+
+function usd(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+}
+
+function feesUsd(quote) {
+  const costs = [...(quote.estimate?.gasCosts || []), ...(quote.estimate?.feeCosts || []).filter((f) => !f.included)];
+  return costs.reduce((sum, c) => sum + (Number(c.amountUSD) || 0), 0);
+}
+
+function errorText(e) {
+  const message = (e && (e.cause?.shortMessage || e.shortMessage || e.message)) || String(e);
+  if (/user rejected|denied|rejected the request/i.test(message)) return 'You cancelled the transaction in your wallet.';
+  if (/no available quotes|no route|not find any route|NotFound/i.test(message)) return 'No swap route is available for this token right now. Try another token.';
+  return message;
+}
+
+function TokenIcon({ token }) {
+  return token.logoURI
+    ? <img src={token.logoURI} alt="" width="28" height="28" className="rounded-circle flex-shrink-0" />
+    : <span className="rounded-circle bg-secondary flex-shrink-0" style={{ width: 28, height: 28 }} />;
+}
+
+function Panel({ opts, client, chain }) {
+  const sdkProviders = useSDKProviders();
+  useEffect(() => { client.setProviders(sdkProviders); }, [client, sdkProviders]);
+  const { account } = useAccount({ chainType: chain.chainType });
+  const { openWalletMenu } = useWalletMenu();
+  const address = account?.isConnected ? account.address : null;
+
+  const [balances, setBalances] = useState(null);
+  const [balanceError, setBalanceError] = useState(null);
+  const [token, setToken] = useState(null);
+  const [choosing, setChoosing] = useState(false);
+  const [quote, setQuote] = useState(null);
+  const [quoteError, setQuoteError] = useState(null);
+  const [status, setStatus] = useState('idle'); // idle | paying | sent | failed
+  const [payError, setPayError] = useState(null);
+  const quoteSeq = useRef(0);
+
+  // The customer's tokens on this chain, most valuable first.
   useEffect(() => {
-    const started = (route) => onEvent('started', route);
-    const completed = (route) => onEvent('completed', route);
-    const failed = (update) => onEvent('failed', update);
-    // Reports each signed transaction once, so the invoice can link support to the swap in LI.FI's explorer.
+    setBalances(null); setBalanceError(null); setToken(null); setQuote(null);
+    if (!address) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await getTokens(client, { chains: [chain.id], chainTypes: [chain.chainType] });
+        const tokens = list.tokens[chain.id] || [];
+        const amounts = await getTokenBalances(client, address, tokens);
+        const held = amounts
+          .filter((t) => t.amount && t.amount > 0n)
+          .map((t) => ({ ...t, valueUsd: Number(formatUnits(t.amount, t.decimals)) * Number(t.priceUSD || 0) }))
+          .filter((t) => t.valueUsd >= MIN_BALANCE_USD)
+          .sort((a, b) => b.valueUsd - a.valueUsd);
+        if (cancelled) return;
+        setBalances(held);
+        if (held.length) setToken(held[0]);
+      } catch (e) {
+        if (!cancelled) setBalanceError(errorText(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [client, chain, address]);
+
+  // What the chosen token must be to deliver the BTC due. Refreshed while the customer decides.
+  const requestQuote = useCallback(async () => {
+    if (!address || !token) return;
+    const seq = ++quoteSeq.current;
+    setQuoteError(null);
+    try {
+      const q = await getQuote(client, {
+        fromChain: chain.id,
+        fromToken: token.address,
+        fromAddress: address,
+        toChain: BTC_CHAIN_ID,
+        toToken: BTC_TOKEN,
+        toAddress: opts.btcAddress,
+        toAmount: toSats(opts.btcDue),
+        ...(opts.fee > 0 ? { fee: opts.fee } : {}),
+      });
+      if (seq === quoteSeq.current) setQuote(q);
+    } catch (e) {
+      if (seq === quoteSeq.current) { setQuote(null); setQuoteError(errorText(e)); }
+    }
+  }, [client, chain, address, token, opts.btcAddress, opts.btcDue, opts.fee]);
+
+  useEffect(() => {
+    setQuote(null);
+    if (status !== 'idle' && status !== 'failed') return;
+    requestQuote();
+    const timer = setInterval(requestQuote, QUOTE_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [requestQuote, status]);
+
+  const fromAmount = quote ? BigInt(quote.action.fromAmount) : null;
+  const enough = fromAmount !== null && token && token.amount >= fromAmount;
+
+  const pay = async () => {
+    if (!quote || !enough) return;
+    setStatus('paying'); setPayError(null);
+    const requested = BigInt(toSats(opts.btcDue));
     const seen = new Set();
-    const updated = ({ action }) => {
-      if (!action || !action.txHash || seen.has(action.txHash)) return;
-      if (action.type !== 'SWAP' && action.type !== 'CROSS_CHAIN') return;
-      seen.add(action.txHash);
-      onEvent('tx', { txHash: action.txHash, txLink: action.txLink, chainId: action.chainId, type: action.type });
-    };
-    emitter.on(WidgetEvent.RouteExecutionStarted, started);
-    emitter.on(WidgetEvent.RouteExecutionUpdated, updated);
-    emitter.on(WidgetEvent.RouteExecutionCompleted, completed);
-    emitter.on(WidgetEvent.RouteExecutionFailed, failed);
-    return () => {
-      emitter.off(WidgetEvent.RouteExecutionStarted, started);
-      emitter.off(WidgetEvent.RouteExecutionUpdated, updated);
-      emitter.off(WidgetEvent.RouteExecutionCompleted, completed);
-      emitter.off(WidgetEvent.RouteExecutionFailed, failed);
-    };
-  }, [emitter, onEvent]);
-  return null;
-}
-
-// Palette that follows the BTCPay checkout's own CSS variables, so the panel
-// picks up the store's brand color and the light or dark theme.
-function themeFromCss(primary) {
-  const palette = primary ? { primary: { main: primary }, secondary: { main: primary } } : undefined;
-  return {
-    colorSchemes: palette ? { light: { palette }, dark: { palette } } : undefined,
-    shape: { borderRadius: 12, borderRadiusSecondary: 999 },
-    typography: { fontFamily: 'inherit' },
-    container: { boxShadow: 'none', border: 'none', borderRadius: 0, maxWidth: '100%' },
+    try {
+      opts.onEvent('started', quote);
+      await executeRoute(client, convertQuoteToRoute(quote), {
+        acceptExchangeRateUpdateHook: async ({ newToAmount }) =>
+          BigInt(newToAmount) * 100n >= requested * BigInt(Math.round(MIN_ACCEPTED_OUTPUT * 100)),
+        updateRouteHook: (route) => {
+          for (const step of route.steps) {
+            for (const action of step.execution?.actions || []) {
+              if (!action.txHash || seen.has(action.txHash)) continue;
+              if (action.type !== 'SWAP' && action.type !== 'CROSS_CHAIN') continue;
+              seen.add(action.txHash);
+              opts.onEvent('tx', { txHash: action.txHash, txLink: action.txLink, chainId: chain.id, type: action.type });
+              setStatus('sent');
+            }
+          }
+        },
+      });
+      setStatus('sent');
+      opts.onEvent('completed', quote);
+    } catch (e) {
+      // Once a transaction is signed the BTC is on its way even if tracking fails.
+      if (seen.size > 0) { setStatus('sent'); return; }
+      setStatus('failed');
+      setPayError(errorText(e));
+      opts.onEvent('failed', e);
+    }
   };
-}
 
-export function buildConfig(opts, providers) {
-  const fromChain = Number(opts.fromChain);
-  const config = {
-    integrator: opts.integrator,
-    fromChain,
-    toChain: BTC_CHAIN_ID,
-    toToken: BTC_TOKEN,
-    // The amount still due on the invoice, in BTC. LI.FI computes what to send.
-    toAmount: opts.btcDue,
-    toAddress: {
-      address: opts.btcAddress,
-      chainType: ChainType.UTXO,
-      name: opts.invoiceLabel || 'This invoice',
-    },
-    // Each BTCPay payment method is one source chain; the destination is always BTC.
-    chains: {
-      from: { allow: [fromChain] },
-      to: { allow: [BTC_CHAIN_ID] },
-    },
-    disabledUI: { toToken: true, toAddress: true },
-    hiddenUI: { reverseTokensButton: true, appearance: true, history: true, language: true, toAddress: true },
-    variant: 'compact',
-    appearance: opts.appearance || 'auto',
-    theme: themeFromCss(opts.primaryColor),
-    providers,
-  };
-  if (opts.apiKey) config.apiKey = opts.apiKey;
-  if (opts.fee > 0) {
-    config.feeConfig = { fee: opts.fee, name: opts.feeName || 'Service fee', showFeePercentage: true, showFeeTooltip: true };
+  if (!address) {
+    return (
+      <button type="button" className="btn btn-primary w-100" onClick={() => openWalletMenu()}>
+        Connect wallet
+      </button>
+    );
   }
-  return config;
+
+  if (status === 'paying' || status === 'sent') {
+    return (
+      <div className="text-center">
+        <p className="mb-1 fw-semibold">{status === 'paying' ? 'Confirm the payment in your wallet…' : 'Payment sent'}</p>
+        <p className="text-muted small mb-0">
+          {status === 'paying'
+            ? 'Your wallet may ask you to approve the token first, then to send it.'
+            : 'Keep this page open. It updates by itself when the payment is received, which can take several minutes.'}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="stablecoins-pay">
+      <div className="d-flex justify-content-between align-items-center small text-muted mb-2">
+        <span>Paying from {chain.name}</span>
+        <button type="button" className="btn btn-link btn-sm p-0" onClick={() => openWalletMenu()}>
+          {address.slice(0, 6)}…{address.slice(-4)}
+        </button>
+      </div>
+
+      {balanceError && <div className="alert alert-danger small">Could not read your balances: {balanceError}</div>}
+      {!balances && !balanceError && <p className="text-center text-muted my-3">Reading your balances…</p>}
+      {balances && balances.length === 0 && (
+        <div className="alert alert-warning small">This wallet has no tokens on {chain.name}. Connect another wallet, or choose another way to pay.</div>
+      )}
+
+      {balances && balances.length > 0 && token && (
+        <>
+          <label className="form-label small text-muted mb-1">Pay with</label>
+          <button type="button" className="form-control d-flex align-items-center gap-2 text-start mb-2"
+            onClick={() => setChoosing(!choosing)} aria-expanded={choosing}>
+            <TokenIcon token={token} />
+            <span className="fw-semibold">{token.symbol}</span>
+            <span className="text-muted small ms-auto">Balance {formatAmount(token.amount, token.decimals)}</span>
+          </button>
+          {choosing && (
+            <div className="list-group mb-3 stablecoins-tokens">
+              {balances.map((t) => (
+                <button type="button" key={t.address}
+                  className={`list-group-item list-group-item-action d-flex align-items-center gap-2 ${t.address === token.address ? 'active' : ''}`}
+                  onClick={() => { setToken(t); setChoosing(false); }}>
+                  <TokenIcon token={t} />
+                  <span className="fw-semibold">{t.symbol}</span>
+                  <span className="small ms-auto">{formatAmount(t.amount, t.decimals)} · {usd(t.valueUsd)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="text-center my-3">
+            {quote ? (
+              <>
+                <div className="text-muted small">Amount to pay</div>
+                <div className="fs-3 fw-semibold">{formatAmount(fromAmount, token.decimals)} {token.symbol}</div>
+                <div className="text-muted small">
+                  {usd(quote.estimate?.fromAmountUSD)}
+                  {feesUsd(quote) > 0 ? ` · network fees about ${usd(feesUsd(quote))}` : ''}
+                </div>
+              </>
+            ) : quoteError ? (
+              <div className="alert alert-warning small mb-0">{quoteError}</div>
+            ) : (
+              <p className="text-muted mb-0">Calculating the amount…</p>
+            )}
+          </div>
+
+          {quote && !enough && (
+            <div className="alert alert-warning small">Not enough {token.symbol} in this wallet. Pick another token.</div>
+          )}
+          {payError && <div className="alert alert-warning small">{payError}</div>}
+          <button type="button" className="btn btn-primary w-100" disabled={!quote || !enough} onClick={pay}>
+            {quote ? `Pay ${formatAmount(fromAmount, token.decimals)} ${token.symbol}` : 'Pay'}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function App({ opts, providers }) {
+  const queryClient = useMemo(() => new QueryClient(), []);
+  const client = useMemo(() => createClient({
+    integrator: opts.integrator,
+    ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
+  }), [opts.integrator, opts.apiKey]);
+  const [chains, setChains] = useState(null);
+  const [error, setError] = useState(null);
+  const fromChain = Number(opts.fromChain);
+
+  useEffect(() => {
+    getChains(client).then(setChains, (e) => setError(errorText(e)));
+  }, [client]);
+
+  // The wallet list is LI.FI's own dialog (MUI); it reads the theme through CSS variables.
+  const theme = useMemo(() => createTheme({
+    cssVariables: true,
+    shape: { borderRadius: 12 },
+    palette: {
+      mode: opts.appearance === 'dark' || (opts.appearance !== 'light' && window.matchMedia?.('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light',
+      ...(opts.primaryColor ? { primary: { main: opts.primaryColor } } : {}),
+    },
+    typography: { fontFamily: 'inherit' },
+  }), [opts.appearance, opts.primaryColor]);
+
+  if (error) return <div className="alert alert-danger small">The payment panel could not load: {error}</div>;
+  if (!chains) return <p className="text-center text-muted my-3">Loading…</p>;
+  const chain = chains.find((c) => c.id === fromChain);
+  if (!chain) return <div className="alert alert-danger small">This chain is not available right now.</div>;
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider theme={theme}>
+        <WalletManagementProviders
+          config={{ enabledChainTypes: [chain.chainType] }}
+          providers={providers}
+          chains={[chain]}>
+          <Panel opts={opts} client={client} chain={chain} />
+        </WalletManagementProviders>
+      </ThemeProvider>
+    </QueryClientProvider>
+  );
 }
 
 const roots = new WeakMap();
@@ -91,12 +322,7 @@ function mount(element, opts, providers) {
   unmount(element);
   const root = createRoot(element);
   roots.set(element, root);
-  root.render(
-    <>
-      <Events onEvent={opts.onEvent || (() => {})} />
-      <LiFiWidget integrator={opts.integrator} config={buildConfig(opts, providers)} />
-    </>
-  );
+  root.render(<App opts={{ onEvent: () => {}, ...opts }} providers={providers} />);
 }
 
 function unmount(element) {
@@ -113,6 +339,5 @@ export function register(family, makeProviders) {
   window.StablecoinsSwapPanels[family] = {
     mount: (element, opts) => mount(element, opts, makeProviders(opts)),
     unmount,
-    buildConfig: (opts) => buildConfig(opts, makeProviders(opts)),
   };
 }

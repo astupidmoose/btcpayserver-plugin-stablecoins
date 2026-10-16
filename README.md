@@ -7,9 +7,9 @@ Each source chain is its own BTCPay payment method, so the WooCommerce BTCPay pl
 | Route | Chains | How the customer pays |
 |---|---|---|
 | **LI.FI** (tokens) | Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Solana, Tron | Connects their wallet in the [LI.FI](https://li.fi) panel, picks any token, signs once. A bridge delivers BTC. |
-| **THORChain** (native coins) | Litecoin, Dogecoin, Zcash (transparent), Cosmos Hub (ATOM), XRP | Sends the coin to a [THORChain](https://thorchain.org) vault with a memo naming the invoice's BTC address. THORChain swaps it and pays BTC. |
+| **THORChain** (native coins) | Litecoin, Dogecoin, Zcash (transparent), Cosmos Hub (ATOM), XRP | Sends an exact amount of the coin to a [THORChain](https://thorchain.org) vault, with no memo. THORChain's memoless deposits recognise the payment by its amount and swap it to BTC for the invoice. |
 
-Bitcoin Cash is deliberately not offered. RUNE and Monero need THORChain's memoless deposits, which are not built yet.
+Bitcoin Cash is deliberately not offered. Monero is not offered by THORChain's memoless API yet.
 
 ## What it adds
 
@@ -21,7 +21,8 @@ Bitcoin Cash is deliberately not offered. RUNE and Monero need THORChain's memol
 | Checkout: BTCPay's own checkout with the LI.FI panel or the THORChain deposit in place of the QR | `Swap/SwapToBtcCheckout.cs`, `Views/Stablecoins/SwapCheckout.cshtml` |
 | THORNode client and the solver that finds the input covering the BTC due | `Thorchain/` |
 | Checkout endpoints: THORChain deposit quote, customer transaction reporting | `Controllers/UISwapCheckoutController.cs` |
-| LI.FI widget bundles, one per wallet family (EVM, Solana, Tron) | `client/` → `Resources/js/swappanel-*.js` |
+| Memoless deposits: quote, register with THORChain's memoless API, read the vault address | `Thorchain/ThorDepositService.cs`, `Thorchain/MemolessClient.cs` |
+| Wallet payment panel (LI.FI SDK), one bundle per wallet family (EVM, Solana, Tron) | `client/` → `Resources/js/swappanel-*.js` |
 | Store settings page (Wallets → Pay from other chains) | `Controllers/UISwapStoreController.cs`, `Views/Stablecoins/SwapSettings.cshtml` |
 | Swap payments on the invoice page, with explorer links | `Views/Stablecoins/ViewSwapToBtcPaymentData.cshtml` |
 
@@ -31,8 +32,8 @@ Payment method ids use underscores, not dashes: the WooCommerce plugin sends the
 
 1. Picking a chain creates a BTCPay invoice with only that method. The handler prices it in BTC and reserves the next address from the store's BTC on-chain wallet, exactly like a plain Bitcoin invoice, and labels the address with the invoice in the wallet.
 2. The checkout is BTCPay's own (store header, amount in BTC, timer, View Details).
-   - **LI.FI:** the widget is locked to the chosen chain, with BTC to the invoice address as the fixed destination and the amount due as an exact-output quote, so the customer sees what to send including every swap and bridge fee.
-   - **THORChain:** the checkout asks the plugin for a deposit. The plugin quotes THORChain from the BTC still due (THORChain only quotes from an input, so it starts from pool prices and scales until the expected BTC covers the amount due) and shows the amount, vault address and memo, with a QR. Quotes are refreshed before they expire, because vaults rotate.
+   - **LI.FI:** the header shows the amount in the invoice's currency. The customer connects a wallet, picks one of the tokens they hold on that chain, and sees one locked amount ("Pay 0.004124 ETH"): an exact-output LI.FI quote for the BTC due, including every swap and bridge fee. BTC and the swap route are never shown.
+   - **THORChain:** the checkout is BTCPay's own on-chain checkout, exactly like a Litecoin invoice: amount in the coin, QR code, address, Pay in wallet, and View Details with the coin's effective exchange rate. In the background the plugin quotes THORChain from the BTC still due (THORChain only quotes from an input, so it starts from pool prices and scales until the expected BTC covers it), registers the swap memo with THORChain's hosted memoless API, and shows an amount ending in the registration's reference number. Every couple of minutes it re-reads the vault address (vaults rotate), notices when the deposit was made, and re-registers if prices moved against the amount. When every payment method on an invoice is one of these, other plugins' extra checkout tabs (such as Trocador's) are hidden.
 3. BTC arrives at the invoice address. BTCPay's NBXplorer connection already watches the store's wallet; the listener records the payment under the chain's payment method. BTCPay's own Bitcoin listener only credits `BTC-CHAIN` addresses, so nothing is counted twice. On every block the listener also rescans the wallet's coins, which catches anything that arrived while BTCPay was down.
 4. Confirmations follow the store's speed policy, as for on-chain BTC. Partial payments, overpayments, expiry and paid-late work as BTCPay normally does, and the checkout re-quotes whatever is still due.
 
@@ -40,10 +41,10 @@ Payment method ids use underscores, not dashes: the WooCommerce plugin sends the
 
 - **Too little BTC arrives:** the invoice is partially paid and the checkout quotes the rest. If it expires that way, refund the partial amount with BTCPay's Refund button.
 - **A LI.FI route fails:** the bridge returns the funds to the customer's wallet on the source chain.
-- **A THORChain deposit without the memo, past the price tolerance, or below the minimum:** THORChain refunds the coins to the sending address, minus network fees. Sending from an exchange means the refund goes to the exchange, so the checkout warns against it.
+- **A THORChain deposit of the wrong amount, past the price tolerance, or below the minimum:** THORChain refunds the coins to the sending address, minus network fees (an exchange withdrawal is refunded to the exchange).
 - **Late BTC:** recorded as paid late, like late on-chain BTC.
 
-For support, the invoice log records each THORChain quote (amount, vault, memo, expiry) and each customer transaction: the LI.FI panel reports the transactions the customer signs, and the THORChain checkout lets the customer paste their transaction ID. Each is linked to LI.FI's explorer (scan.li.fi) or a THORChain explorer (runescan.io). The invoice's payment table also shows the THORChain inbound transaction read from the BTC payment's `OUT:` memo.
+For support, the invoice log records each THORChain payment the customer was shown (amount, vault, memoless registration, memo, expiry) and each LI.FI transaction the customer signs in the panel. Each is linked to LI.FI's explorer (scan.li.fi) or a THORChain explorer (runescan.io). The invoice's payment table also shows the THORChain inbound transaction read from the BTC payment's `OUT:` memo.
 
 ## Settings (per store)
 
@@ -64,7 +65,7 @@ dotnet build src/BTCPayServer.Plugins.Stablecoins/BTCPayServer.Plugins.Stablecoi
 dotnet test --project tests/BTCPayServer.Plugins.Stablecoins.Tests/BTCPayServer.Plugins.Stablecoins.Tests.csproj
 ```
 
-The widget bundles are committed. To rebuild them: `cd client && npm ci && npm run build`.
+The panel bundles are committed. To rebuild them: `cd client && npm ci && npm run build`.
 
 To make an installable package the same way the [Plugin Builder](https://plugin-builder.btcpayserver.org/) does:
 
@@ -78,13 +79,13 @@ Upload the resulting `.btcpay` file under Server Settings → Plugins → Upload
 ## Known limits
 
 - **Not yet run end to end.** Built and unit-tested (THORNode is faked in tests); LI.FI and THORNode were not reachable from the build environment.
-- **THORChain memos need a capable wallet.** Litecoin, Dogecoin and Zcash deposits need an OP_RETURN memo, which many wallets cannot add (THORChain-aware wallets such as Ctrl or Vultisig can). Cosmos and XRP wallets usually have a memo field. THORChain's memoless deposits would remove this, but registering a reference needs a THORChain transaction, so it is left for later.
+- **Memoless deposits depend on THORChain's hosted API** (api.thorchain.org/memoless, no key, about 100 requests per 15 minutes per IP). It pays the registration from its own wallet and may add a small affiliate fee to the memo; the plugin checks the memo still pays the invoice's address.
 - **The customer can edit the amount in the LI.FI panel.** Anything short leaves the invoice partially paid.
 - **Chain icons** are simple placeholders.
 - **Refunds** use BTCPay's own refund flow (BTC). Address screening is not built.
 
 ## Roadmap
 
-- THORChain memoless deposits (RUNE, Monero when THORChain lists it, and wallets without memo support).
+- Monero, when THORChain's memoless API lists it.
 - Settle into USDC instead of BTC.
 - Publish on the Plugin Builder.

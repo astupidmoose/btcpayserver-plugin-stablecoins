@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
+using BTCPayServer.Plugins.Stablecoins.Thorchain;
 using BTCPayServer.Services;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Wallets;
@@ -144,7 +145,7 @@ public class SwapToBtcPaymentMethodHandler(
         if (config.BufferPercent is < 0m or > 5m)
             yield return (nameof(config.BufferPercent), "The buffer must be between 0% and 5%.");
         if (!string.IsNullOrEmpty(config.ThornodeUrl) &&
-            !(Uri.TryCreate(config.ThornodeUrl, UriKind.Absolute, out var url) && url.Scheme == Uri.UriSchemeHttps))
+            ThorQuoteService.SafeUrl(config.ThornodeUrl, "https://default.invalid/").Host == "default.invalid")
             yield return (nameof(config.ThornodeUrl), "Enter an https:// THORNode URL, or leave it empty for the default.");
         if (!string.IsNullOrEmpty(config.ThorAffiliate) &&
             (config.ThorAffiliate.Length > 30 || !config.ThorAffiliate.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '+')))
