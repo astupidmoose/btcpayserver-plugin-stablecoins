@@ -1,6 +1,7 @@
 #nullable enable
 using System.Linq;
 using BTCPayServer.Abstractions.Contracts;
+using BTCPayServer.Abstractions.Extensions;
 using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Hosting;
 using BTCPayServer.Payments;
@@ -47,6 +48,7 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
             services.AddDefaultPrettyName(source.PaymentMethodId, source.Name);
             services.AddTransactionLinkProvider(source.PaymentMethodId, new DefaultTransactionLinkProvider(btcTxLink));
         }
+        services.AddStartupTask<LegacyIdMigration>();
         services.AddSingleton<SwapToBtcListener>();
         services.AddHostedService(p => p.GetRequiredService<SwapToBtcListener>());
 

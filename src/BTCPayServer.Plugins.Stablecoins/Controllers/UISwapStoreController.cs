@@ -13,13 +13,16 @@ using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
+using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Plugins.Stablecoins.Controllers;
 
 [Route("stores/{storeId}/stablecoins/swap")]
 [Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie)]
 [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-public class UISwapStoreController(StoreRepository storeRepository, PaymentMethodHandlerDictionary handlers) : Controller
+public class UISwapStoreController(StoreRepository storeRepository, PaymentMethodHandlerDictionary handlers,
+    ILogger<UISwapStoreController> logger) : Controller
 {
     public const string SettingsView = StablecoinsPlugin.ViewsDirectory + "/SwapSettings.cshtml";
 
@@ -62,6 +65,7 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
     public async Task<IActionResult> SwapSettings(SwapSettingsViewModel vm)
     {
         var store = StoreData;
+        logger.LogInformation("Saving swap settings of store {StoreId}", store.Id);
         vm.HasBtcWallet = store.GetDerivationSchemeSettings(handlers, "BTC") is not null;
         var config = new SwapToBtcPaymentMethodConfig
         {
@@ -84,6 +88,13 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             ModelState.AddModelError(string.Empty, "Set up the store's BTC on-chain wallet first: swapped BTC is paid into it.");
         if (!ModelState.IsValid)
         {
+            var errors = string.Join(" ", ModelState.Values.SelectMany(v => v.Errors).Select(e => e.ErrorMessage).Distinct());
+            logger.LogWarning("Swap settings of store {StoreId} not saved: {Errors}", store.Id, errors);
+            TempData.SetStatusMessageModel(new StatusMessageModel
+            {
+                Severity = StatusMessageModel.StatusSeverity.Error,
+                Message = "Not saved: " + errors
+            });
             FillChains(vm);
             return View(SettingsView, vm);
         }
@@ -99,6 +110,7 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         }
         store.SetStoreBlob(blob);
         await storeRepository.UpdateStore(store);
+        logger.LogInformation("Swap settings of store {StoreId} saved, {Count} chains enabled", store.Id, enabled.Count);
 
         TempData.SetStatusMessageModel(new StatusMessageModel
         {
@@ -163,12 +175,16 @@ public class SwapSettingsViewModel
     public List<SwapChainViewModel> Chains { get; set; } = new();
 }
 
+/// <summary>
+/// Only Code and Enabled are posted back. The rest is display-only, so it must not be validated:
+/// MVC treats non-nullable strings as required, and the missing values made every save fail silently.
+/// </summary>
 public class SwapChainViewModel
 {
     public string Code { get; set; } = "";
-    public string Name { get; set; } = "";
-    public string PaymentMethodId { get; set; } = "";
-    public string Image { get; set; } = "";
-    public SwapProvider Provider { get; set; }
+    [ValidateNever] public string Name { get; set; } = "";
+    [ValidateNever] public string PaymentMethodId { get; set; } = "";
+    [ValidateNever] public string Image { get; set; } = "";
+    [ValidateNever] public SwapProvider Provider { get; set; }
     public bool Enabled { get; set; }
 }
