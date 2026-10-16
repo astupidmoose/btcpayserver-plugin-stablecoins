@@ -22,7 +22,6 @@ Each source chain is its own BTCPay payment method, so the WooCommerce BTCPay pl
 | Wallet payment panel (LI.FI SDK), one bundle per wallet family (EVM, Solana, Tron) | `client/` → `Resources/js/swappanel-*.js` |
 | Store settings page (Wallets → Pay from other chains) | `Controllers/UISwapStoreController.cs`, `Views/Stablecoins/SwapSettings.cshtml` |
 | Swap payments on the invoice page | `Views/Stablecoins/ViewSwapToBtcPaymentData.cshtml` |
-| Readable WooCommerce gateway titles (must-use plugin) | `woocommerce/` |
 
 Payment method ids use underscores, not dashes: the WooCommerce plugin sends the id back with every `-` turned into `_`, and BTCPay only maps that back for its built-in coins.
 
@@ -53,13 +52,6 @@ For support, the invoice log records each LI.FI transaction the customer signs (
 - Amount buffer: extra BTC asked from the customer (default 0). Leave it at 0 and set the store's payment tolerance to about 1% to absorb small shortfalls yourself.
 
 Also set a longer invoice expiry (for example 60 minutes): swaps to BTC usually take several minutes.
-
-## WooCommerce gateway titles
-
-In separate gateways mode, the BTCPay for WooCommerce plugin titles each gateway with its payment method id
-(LIFI_BASE), since BTCPay's API has no display name. Copy `woocommerce/btcpay-stablecoins-gateway-titles.php`
-to `wp-content/mu-plugins/` to give them readable titles ("Base Network", "Solana"...). It only
-replaces a title that is still the id, so titles you set in WooCommerce > Settings > Payments stay.
 
 ## Build, test, package
 
