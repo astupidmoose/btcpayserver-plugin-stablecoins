@@ -22,17 +22,6 @@ public class SwapToBtcPaymentMethodConfig
     /// <summary>Optional WalletConnect (Reown) project id, which enables mobile wallets on EVM chains.</summary>
     public string? WalletConnectProjectId { get; set; }
 
-    /// <summary>THORNode REST endpoint used for THORChain quotes. Defaults to a public THORNode gateway.</summary>
-    public string? ThornodeUrl { get; set; }
-    /// <summary>THORChain's hosted memoless API; not on the settings page, the default is THORChain's own.</summary>
-    public string? MemolessUrl { get; set; }
-    /// <summary>Optional THORName that receives the THORChain affiliate fee.</summary>
-    public string? ThorAffiliate { get; set; }
-    /// <summary>THORChain affiliate fee in basis points (100 = 1%).</summary>
-    public int ThorAffiliateBps { get; set; }
-    /// <summary>Maximum price movement THORChain accepts before refunding the swap, in basis points.</summary>
-    public int ThorToleranceBps { get; set; } = SwapDefaults.ThorToleranceBps;
-
     /// <summary>NEAR Intents 1Click API key (a JWT). Stays on the server.</summary>
     public string? IntentsApiKey { get; set; }
     /// <summary>1Click endpoint; not on the settings page, the default is NEAR Intents' own.</summary>
@@ -72,7 +61,6 @@ public static class SwapDefaults
 {
     public const string Integrator = "btcpay-stablecoins";
     public const decimal BufferPercent = 0m;
-    public const int ThorToleranceBps = 300;
     public const int IntentsSlippageBps = 50;
 }
 
@@ -85,8 +73,6 @@ public class SwapToBtcPromptDetails
     public string? KeyPath { get; set; }
     public int KeyIndex { get; set; }
     public long FromChainId { get; set; }
-    /// <summary>Source asset for THORChain swaps, for example LTC.LTC.</summary>
-    public string? ThorAsset { get; set; }
 }
 
 /// <summary>
@@ -99,8 +85,4 @@ public class SwapToBtcPaymentData
     public long ConfirmationCount { get; set; }
     public bool RBF { get; set; }
     public string? KeyPath { get; set; }
-    /// <summary>
-    /// The customer's inbound transaction, when the BTC carries it: THORChain's outbound memo is OUT:&lt;inbound tx&gt;.
-    /// </summary>
-    public string? SourceTxId { get; set; }
 }

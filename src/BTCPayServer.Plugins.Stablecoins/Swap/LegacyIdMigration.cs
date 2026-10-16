@@ -19,6 +19,7 @@ namespace BTCPayServer.Plugins.Stablecoins.Swap;
 /// Version 0.7 makes USDC and USDT from an exchange options of the token checkouts instead of payment methods
 /// (NEAR_USDC, NEAR_USDT), so WooCommerce stops listing them: their payment methods are removed, and whether
 /// they were on is kept in the settings.
+/// Version 0.8 drops THORChain (THOR_LITECOIN, THOR_ETH...): those payment methods are removed.
 /// </summary>
 public class LegacyIdMigration(StoreRepository storeRepository, ILogger<LegacyIdMigration> logger) : IStartupTask
 {
@@ -27,7 +28,8 @@ public class LegacyIdMigration(StoreRepository storeRepository, ILogger<LegacyId
         foreach (var store in await storeRepository.GetStores())
         {
             var exchange = MoveExchangeOptions(store);
-            if (!Migrate(store) && exchange is null)
+            var thorchain = RemoveThorchain(store);
+            if (!Migrate(store) && exchange is null && !thorchain)
                 continue;
             await storeRepository.UpdateStore(store);
             if (exchange is { Length: > 0 })
@@ -105,5 +107,21 @@ public class LegacyIdMigration(StoreRepository storeRepository, ILogger<LegacyId
             store.SetPaymentMethodConfig(chain.PaymentMethodId, config);
         }
         return on.ToArray();
+    }
+
+    /// <summary>Removes every THOR_ payment method. Returns true when the store changed.</summary>
+    public static bool RemoveThorchain(StoreData store)
+    {
+        var ids = store.GetPaymentMethodConfigs().Keys.Where(id => id.ToString().StartsWith("THOR_", System.StringComparison.Ordinal)).ToList();
+        if (ids.Count == 0)
+            return false;
+        var blob = store.GetStoreBlob();
+        foreach (var id in ids)
+        {
+            store.SetPaymentMethodConfig(id, null);
+            blob.SetExcluded(id, false);
+        }
+        store.SetStoreBlob(blob);
+        return true;
     }
 }

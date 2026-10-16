@@ -50,17 +50,12 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             FeePercent = any.Fee * 100m,
             BufferPercent = any.BufferPercent,
             WalletConnectProjectId = any.WalletConnectProjectId,
-            ThornodeUrl = any.ThornodeUrl,
-            ThorAffiliate = any.ThorAffiliate,
-            ThorAffiliateBps = any.ThorAffiliateBps,
-            ThorToleranceBps = any.ThorToleranceBps,
             IntentsApiKey = any.IntentsApiKey,
             RefundEvm = any.RefundEvm,
             RefundSolana = any.RefundSolana,
             RefundTron = any.RefundTron,
             IntentsSlippageBps = any.IntentsSlippageBps,
             IntentsUrl = any.IntentsUrl,
-            ThorMemolessUrl = any.MemolessUrl,
             Chains = chains.Select(c => new SwapChainViewModel
             {
                 Code = c.Chain.Code,
@@ -86,11 +81,6 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             Fee = vm.FeePercent / 100m,
             BufferPercent = vm.BufferPercent,
             WalletConnectProjectId = string.IsNullOrWhiteSpace(vm.WalletConnectProjectId) ? null : vm.WalletConnectProjectId.Trim(),
-            ThornodeUrl = string.IsNullOrWhiteSpace(vm.ThornodeUrl) ? null : vm.ThornodeUrl.Trim(),
-            ThorAffiliate = string.IsNullOrWhiteSpace(vm.ThorAffiliate) ? null : vm.ThorAffiliate.Trim(),
-            ThorAffiliateBps = vm.ThorAffiliateBps,
-            ThorToleranceBps = vm.ThorToleranceBps,
-            MemolessUrl = Clean(vm.ThorMemolessUrl),
             IntentsApiKey = Clean(vm.IntentsApiKey),
             IntentsUrl = Clean(vm.IntentsUrl),
             RefundEvm = Clean(vm.RefundEvm),
@@ -100,8 +90,6 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         };
         foreach (var (field, message) in SwapToBtcPaymentMethodHandler.Validate(config))
             ModelState.AddModelError(field == nameof(config.Fee) ? nameof(vm.FeePercent) : field, message);
-        if (string.IsNullOrEmpty(config.ThorAffiliate) && config.ThorAffiliateBps > 0)
-            ModelState.AddModelError(nameof(vm.ThorAffiliate), "Set the THORName that receives the affiliate fee, or set the fee to 0.");
         if (config.RefundEvm is { } evm && !IsEvmAddress(evm))
             ModelState.AddModelError(nameof(vm.RefundEvm), "The EVM refund address should be 0x followed by 40 hex characters.");
         if (config.RefundSolana is { } sol && !IsBase58(sol, 32, 44))
@@ -199,20 +187,6 @@ public class SwapSettingsViewModel
     [Display(Name = "WalletConnect project ID (optional)")]
     public string? WalletConnectProjectId { get; set; }
 
-    [Display(Name = "THORNode URL (optional)")]
-    public string? ThornodeUrl { get; set; }
-
-    [Display(Name = "THORChain affiliate THORName (optional)")]
-    public string? ThorAffiliate { get; set; }
-
-    [Display(Name = "THORChain affiliate fee (basis points)")]
-    [Range(0, 1000)]
-    public int ThorAffiliateBps { get; set; }
-
-    [Display(Name = "THORChain price tolerance (basis points)")]
-    [Range(10, 5000)]
-    public int ThorToleranceBps { get; set; } = SwapDefaults.ThorToleranceBps;
-
     [Display(Name = "NEAR Intents API key")]
     public string? IntentsApiKey { get; set; }
 
@@ -231,7 +205,6 @@ public class SwapSettingsViewModel
 
     /// <summary>Not on the page; kept so a save does not drop a custom endpoint (used for testing).</summary>
     public string? IntentsUrl { get; set; }
-    public string? ThorMemolessUrl { get; set; }
 
     public List<SwapChainViewModel> Chains { get; set; } = new();
 }

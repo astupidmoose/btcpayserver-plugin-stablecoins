@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
-using BTCPayServer.Plugins.Stablecoins.Thorchain;
 using BTCPayServer.Services;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Wallets;
@@ -90,8 +89,7 @@ public class SwapToBtcPaymentMethodHandler(
             AccountDerivation = prepare.AccountDerivation.ToString(),
             KeyPath = reserved.KeyPath?.ToString(),
             KeyIndex = reserved.Index ?? (int)(reserved.KeyPath?.Indexes.Last() ?? 0),
-            FromChainId = chain.LifiChainId,
-            ThorAsset = chain.ThorAsset
+            FromChainId = chain.LifiChainId
         }, Serializer);
     }
 
@@ -144,16 +142,6 @@ public class SwapToBtcPaymentMethodHandler(
             yield return (nameof(config.Fee), "The fee must be at least 0 and below 10%.");
         if (config.BufferPercent is < 0m or > 5m)
             yield return (nameof(config.BufferPercent), "The buffer must be between 0% and 5%.");
-        if (!string.IsNullOrEmpty(config.ThornodeUrl) &&
-            ThorQuoteService.SafeUrl(config.ThornodeUrl, "https://default.invalid/").Host == "default.invalid")
-            yield return (nameof(config.ThornodeUrl), "Enter an https:// THORNode URL, or leave it empty for the default.");
-        if (!string.IsNullOrEmpty(config.ThorAffiliate) &&
-            (config.ThorAffiliate.Length > 30 || !config.ThorAffiliate.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '+')))
-            yield return (nameof(config.ThorAffiliate), "A THORName is up to 30 letters, digits, '-', '_' or '+'.");
-        if (config.ThorAffiliateBps is < 0 or > 1000)
-            yield return (nameof(config.ThorAffiliateBps), "The THORChain affiliate fee must be between 0 and 1000 basis points.");
-        if (config.ThorToleranceBps is < 10 or > 5000)
-            yield return (nameof(config.ThorToleranceBps), "The price tolerance must be between 10 and 5000 basis points.");
     }
 
     public SwapToBtcPromptDetails ParsePaymentPromptDetails(JToken details) =>

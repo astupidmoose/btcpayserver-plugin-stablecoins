@@ -105,8 +105,7 @@ public class SwapToBtcListener(
             Outpoint = id,
             RBF = rbf,
             KeyPath = keyPath,
-            ConfirmationCount = Math.Max(0, tx?.Confirmations ?? 0),
-            SourceTxId = handler.Chain.Provider == SwapProvider.Thorchain ? ThorOutboundTxId(tx?.Transaction) : null
+            ConfirmationCount = Math.Max(0, tx?.Confirmations ?? 0)
         };
         var paymentData = new PaymentData
         {
@@ -203,29 +202,6 @@ public class SwapToBtcListener(
             return;
         await paymentService.UpdatePayments(changed);
         EventAggregator.Publish(new InvoiceNeedUpdateEvent(invoice.Id));
-    }
-
-    /// <summary>
-    /// THORChain marks its outbound transactions with an OP_RETURN memo OUT:&lt;inbound tx hash&gt;,
-    /// which ties the BTC back to the customer's deposit on the other chain.
-    /// </summary>
-    public static string? ThorOutboundTxId(Transaction? tx)
-    {
-        if (tx is null)
-            return null;
-        foreach (var output in tx.Outputs)
-        {
-            var script = output.ScriptPubKey;
-            if (!script.IsUnspendable)
-                continue;
-            var data = script.ToOps().Skip(1).Where(o => o.PushData is { Length: > 0 }).Select(o => o.PushData).FirstOrDefault();
-            if (data is null)
-                continue;
-            var memo = System.Text.Encoding.ASCII.GetString(data);
-            if (memo.StartsWith("OUT:", StringComparison.OrdinalIgnoreCase) && memo.Length > 4)
-                return memo[4..].Trim();
-        }
-        return null;
     }
 
     /// <summary>Same confirmation rules as BTCPay's own on-chain payments.</summary>
