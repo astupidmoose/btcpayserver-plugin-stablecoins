@@ -9,8 +9,8 @@ namespace BTCPayServer.Plugins.Stablecoins.Swap;
 
 /// <summary>
 /// The "from exchange" options (USDC, USDT by deposit address) are not tabs of their own on the checkout when the
-/// invoice has other ways to pay: they show as buttons under the tabs instead ("Send USDC from an exchange"),
-/// whichever payment method is showing. An invoice that can only be paid this way keeps them as tabs.
+/// invoice can be paid from a wallet on a token chain (LI.FI): they show as buttons at the bottom of those wallet
+/// checkouts instead ("Send USDC from an exchange"). Without a token chain they stay as tabs, so they can still be reached.
 /// </summary>
 public class SwapCheckoutExchangeOptions : IGlobalCheckoutModelExtension
 {
@@ -29,7 +29,7 @@ public class SwapCheckoutExchangeOptions : IGlobalCheckoutModelExtension
     public static JArray? Apply(List<CheckoutModel.AvailablePaymentMethod> methods)
     {
         var exchange = methods.Where(m => m.Displayed && IsExchangeOption(m.PaymentMethodId)).ToList();
-        if (exchange.Count == 0 || !methods.Any(m => m.Displayed && !IsExchangeOption(m.PaymentMethodId)))
+        if (exchange.Count == 0 || !methods.Any(m => m.Displayed && SwapSourceChain.Find(m.PaymentMethodId)?.Provider == SwapProvider.Lifi))
             return null;
         foreach (var m in exchange)
             m.Displayed = false;

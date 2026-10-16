@@ -156,14 +156,17 @@ public class SwapToBtcTests
                 Displayed = true
             }).ToList();
 
-        var methods = Methods("BTC-CHAIN", "NEAR_USDC", "THOR_LITECOIN", "NEAR_USDT");
+        var methods = Methods("BTC-CHAIN", "NEAR_USDC", "LIFI_ETHEREUM", "THOR_LITECOIN", "NEAR_USDT");
         var buttons = SwapCheckoutExchangeOptions.Apply(methods);
-        Assert.Equal(new[] { "BTC-CHAIN", "THOR_LITECOIN" }, methods.Where(m => m.Displayed).Select(m => m.PaymentMethodName));
+        Assert.Equal(new[] { "BTC-CHAIN", "LIFI_ETHEREUM", "THOR_LITECOIN" }, methods.Where(m => m.Displayed).Select(m => m.PaymentMethodName));
         Assert.NotNull(buttons);
         Assert.Equal(new[] { "NEAR_USDC", "NEAR_USDT" }, buttons!.Select(b => (string)b["paymentMethodId"]!));
         Assert.Equal("Send USDC from an exchange", (string)buttons![0]["label"]!);
 
-        // Paying from an exchange is the only way: the tabs stay, no buttons.
+        // No wallet checkout on a token chain to hold the buttons: the tabs stay.
+        var noTokens = Methods("BTC-CHAIN", "THOR_LITECOIN", "NEAR_USDC");
+        Assert.Null(SwapCheckoutExchangeOptions.Apply(noTokens));
+        Assert.All(noTokens, m => Assert.True(m.Displayed));
         var only = Methods("NEAR_USDC", "NEAR_USDT");
         Assert.Null(SwapCheckoutExchangeOptions.Apply(only));
         Assert.All(only, m => Assert.True(m.Displayed));
