@@ -7,7 +7,7 @@ Each source chain is its own BTCPay payment method, so the WooCommerce BTCPay pl
 | Route | Chains | How the customer pays |
 |---|---|---|
 | **LI.FI** (tokens) | Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Solana, Tron | Connects their wallet in the [LI.FI](https://li.fi) panel, picks any token, signs once. A bridge delivers BTC. |
-| **THORChain** (native coins) | Litecoin, Dogecoin, Zcash (transparent), Cosmos Hub (ATOM), XRP | Sends an exact amount of the coin to a [THORChain](https://thorchain.org) vault, with no memo. THORChain's memoless deposits recognise the payment by its amount and swap it to BTC for the invoice. |
+| **THORChain** (native coins) | Litecoin, Dogecoin, Zcash (transparent), Cosmos Hub (ATOM), XRP, and the native coin of Ethereum (ETH), Base (ETH), BNB Chain (BNB), Avalanche (AVAX), Solana (SOL) and Tron (TRX). Tokens on those chains go through LI.FI. | Sends an exact amount of the coin to a [THORChain](https://thorchain.org) vault, with no memo. THORChain's memoless deposits recognise the payment by its amount and swap it to BTC for the invoice. |
 
 Bitcoin Cash is deliberately not offered. Monero is not offered by THORChain's memoless API yet.
 
