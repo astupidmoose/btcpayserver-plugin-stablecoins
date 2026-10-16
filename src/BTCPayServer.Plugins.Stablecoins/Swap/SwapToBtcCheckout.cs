@@ -5,6 +5,7 @@ using System.Globalization;
 using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
 using BTCPayServer.Plugins.Stablecoins.Intents;
+using BTCPayServer.Rating;
 using BTCPayServer.Services;
 using BTCPayServer.Payments;
 using BTCPayServer.Services.Invoices;
@@ -173,6 +174,7 @@ public class SwapToBtcCheckoutModelExtension(
             model.OrderAmount = Fiat(accounting.TotalDue);
             model.OrderAmountFiat = null;
         }
+        var display = DisplayPrice(context);
         model.Rate = null;
         model.ShowPayInWalletButton = false;
         model.Address = null;
@@ -190,8 +192,33 @@ public class SwapToBtcCheckoutModelExtension(
             ["fee"] = config.Fee,
             ["bufferPercent"] = config.BufferPercent,
             ["walletConnectProjectId"] = config.WalletConnectProjectId,
+            ["displayCurrency"] = display.Currency,
+            ["btcPrice"] = display.BtcPrice?.ToString(CultureInfo.InvariantCulture),
             ["sourceUrl"] = context.UrlHelper.Content($"~/plugins/stablecoins/swaps/{invoice.Id}/{handler.PaymentMethodId}/source")
         };
+    }
+
+    /// <summary>
+    /// The store's default currency and the BTC price in it, for the panel's "about 20.62 CAD" line.
+    /// Falls back to the invoice's currency when the invoice has no rate for the store's default.
+    /// </summary>
+    static (string Currency, decimal? BtcPrice) DisplayPrice(CheckoutModelContext context)
+    {
+        var invoice = context.InvoiceEntity;
+        var preferred = context.StoreBlob.DefaultCurrency;
+        if (!string.IsNullOrEmpty(preferred) && !preferred.Equals(invoice.Currency, StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (invoice.TryGetRate(new CurrencyPair("BTC", preferred.ToUpperInvariant()), out var price) && price > 0m)
+                    return (preferred.ToUpperInvariant(), price);
+            }
+            catch
+            {
+                // No such rate on this invoice.
+            }
+        }
+        return (invoice.Currency, context.Prompt.Rate > 0m ? context.Prompt.Rate : null);
     }
 
     /// <summary>Rounded up to what the coin can send, without trailing zeros past the coin's precision.</summary>

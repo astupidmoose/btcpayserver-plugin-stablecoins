@@ -15,6 +15,7 @@ import {
   formatUnits,
   getChains,
   getQuote,
+  getToken,
   getTokenBalances,
   getTokens,
 } from '@lifi/sdk';
@@ -72,10 +73,14 @@ export function formatAmount(units, decimals) {
   return `${w}.${rounded.slice(-keep)}`.replace(/\.?0+$/, '');
 }
 
-function usd(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+// LI.FI prices in USD; amounts are shown in the store's default currency instead.
+// usdRate is that currency per US dollar (the BTC price in it over LI.FI's BTC price in USD).
+function money(usdValue, usdRate, currency) {
+  const value = Number(usdValue) * usdRate;
+  if (!currency || !Number.isFinite(value) || !(usdRate > 0)) return null;
+  let digits = 2;
+  try { digits = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits; } catch { /* unknown code */ }
+  return `${value.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })} ${currency}`;
 }
 
 function feesUsd(quote) {
@@ -114,6 +119,19 @@ function Panel({ opts, client, chain }) {
   const [status, setStatus] = useState('idle'); // idle | paying | sent | failed
   const [payError, setPayError] = useState(null);
   const quoteSeq = useRef(0);
+  const [usdRate, setUsdRate] = useState(null);
+  const show = (usdValue) => money(usdValue, usdRate, opts.displayCurrency);
+
+  // The store's currency per US dollar, from LI.FI's BTC price and the invoice's BTC rate.
+  useEffect(() => {
+    let cancelled = false;
+    const price = Number(opts.btcPrice);
+    if (!(price > 0)) return;
+    getToken(client, BTC_CHAIN_ID, BTC_TOKEN)
+      .then((btc) => { const usd = Number(btc?.priceUSD); if (!cancelled && usd > 0) setUsdRate(price / usd); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [client, opts.btcPrice]);
 
   // The customer's tokens on this chain, most valuable first.
   useEffect(() => {
@@ -275,7 +293,7 @@ function Panel({ opts, client, chain }) {
                   onClick={() => { setToken(t); setChoosing(false); }}>
                   <TokenIcon token={t} />
                   <span className="fw-semibold">{t.symbol}</span>
-                  <span className="small ms-auto">{formatAmount(t.amount, t.decimals)} · {usd(t.valueUsd)}</span>
+                  <span className="small ms-auto">{formatAmount(t.amount, t.decimals)}{show(t.valueUsd) ? ` · ${show(t.valueUsd)}` : ''}</span>
                 </button>
               ))}
             </div>
@@ -286,10 +304,12 @@ function Panel({ opts, client, chain }) {
               <>
                 <div className="text-muted small">Amount to pay</div>
                 <div className="fs-3 fw-semibold">{formatAmount(fromAmount, token.decimals)} {token.symbol}</div>
-                <div className="text-muted small">
-                  {usd(quote.estimate?.fromAmountUSD)}
-                  {feesUsd(quote) > 0 ? ` · network fees about ${usd(feesUsd(quote))}` : ''}
-                </div>
+                {show(quote.estimate?.fromAmountUSD) && (
+                  <div className="text-muted small">
+                    {`about ${show(quote.estimate?.fromAmountUSD)}`}
+                    {feesUsd(quote) > 0 && show(feesUsd(quote)) ? ` · network fees about ${show(feesUsd(quote))}` : ''}
+                  </div>
+                )}
               </>
             ) : quoteError ? (
               <div className="alert alert-warning small mb-0">{quoteError}</div>

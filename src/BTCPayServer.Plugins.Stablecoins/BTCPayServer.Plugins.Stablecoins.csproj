@@ -7,7 +7,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <Product>Stablecoins</Product>
     <Description>Let customers pay BTC invoices with tokens on Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Solana and Tron, from a wallet (LI.FI) or as USDC and USDT from an exchange (NEAR Intents), straight to the store's own BTC wallet.</Description>
-    <Version>0.8.1</Version>
+    <Version>0.8.2</Version>
   </PropertyGroup>
 
   <!-- Plugin development properties -->
