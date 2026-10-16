@@ -63,6 +63,7 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         public IntentsPayment? Payment;
         public string? Error;
         public DateTimeOffset ErrorAt;
+        public string? LoggedError;
         public Task? Running;
         public DateTimeOffset Touched;
     }
@@ -71,6 +72,28 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
     /// <summary>The exchange option (USDC, USDT) each invoice's checkout shows instead of the wallet panel.</summary>
     readonly ConcurrentDictionary<string, (string Code, DateTimeOffset At)> _chosen = new();
     readonly ConcurrentDictionary<string, (DateTimeOffset At, List<OneClickToken> Tokens)> _tokens = new();
+    /// <summary>
+    /// Minimum swap NEAR Intents asked for on each network ("Temporary swap limits: minimum swap amount is $100"), in USD.
+    /// Smaller invoices do not get the option on that network for a while, instead of showing an error.
+    /// </summary>
+    readonly ConcurrentDictionary<string, (decimal Usd, DateTimeOffset At)> _minimums = new();
+    static readonly TimeSpan MinimumFor = TimeSpan.FromMinutes(30);
+    static readonly System.Text.RegularExpressions.Regex MinimumPattern =
+        new(@"minimum swap amount is \$\s*([\d,]+(?:\.\d+)?)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    public static decimal? ParseMinimumUsd(string? message) =>
+        message is not null && MinimumPattern.Match(message) is { Success: true } m &&
+        decimal.TryParse(m.Groups[1].Value.Replace(",", ""), NumberStyles.Number, CultureInfo.InvariantCulture, out var usd) ? usd : null;
+
+    /// <summary>True when NEAR Intents recently refused swaps this small on the network.</summary>
+    public bool BelowMinimum(string? network, decimal btcDue)
+    {
+        if (network is null || !_minimums.TryGetValue(network, out var min) || Now() - min.At > MinimumFor)
+            return false;
+        var btcUsd = _tokens.Values.SelectMany(t => t.Tokens).FirstOrDefault(t => t.Blockchain == "btc" && t.Symbol == "BTC")?.Price;
+        // Without a price, keep offering it: the quote then says whether it is still too small.
+        return btcUsd is > 0m && btcDue * btcUsd.Value < min.Usd;
+    }
 
     /// <summary>Settable so tests do not wait.</summary>
     public Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.UtcNow;
@@ -213,11 +236,23 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not prepare a {Coin} payment on {Network} for {Address}", chain.Ticker, networkCode, btcAddress);
+            var minimum = ParseMinimumUsd(ex.Message);
+            if (minimum is { } usd)
+                _minimums[networkCode] = (usd, Now());
+            bool log;
             lock (entry)
             {
-                entry.Error = "This payment option is unavailable right now. Please try again shortly or pay from a wallet instead.";
+                entry.Error = minimum is not null
+                    ? "This payment option is only available for larger orders right now. Please pay from a wallet instead."
+                    : "This payment option is unavailable right now. Please try again shortly or pay from a wallet instead.";
                 entry.ErrorAt = Now();
+                // The reason goes in the invoice's log (for the store, not the customer), once per distinct reason.
+                log = entry.LoggedError != ex.Message;
+                entry.LoggedError = ex.Message;
             }
+            if (log)
+                await Log(invoiceId, $"Could not get a {chain.Ticker} on {network.Name} deposit address from NEAR Intents: {ex.Message}",
+                    InvoiceEventData.EventSeverity.Warning);
         }
     }
 
@@ -277,12 +312,12 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         return value;
     }
 
-    async Task Log(string invoiceId, string message)
+    async Task Log(string invoiceId, string message, InvoiceEventData.EventSeverity severity = InvoiceEventData.EventSeverity.Info)
     {
         try
         {
             var logs = new InvoiceLogs();
-            logs.Write(message, InvoiceEventData.EventSeverity.Info);
+            logs.Write(message, severity);
             await invoiceRepository.AddInvoiceLogs(invoiceId, logs);
         }
         catch (Exception ex)

@@ -71,6 +71,9 @@ public class SwapToBtcCheckoutModelExtension(
 
         // Token checkouts also offer "Send USDC from an exchange": a deposit address paid into this checkout's BTC address.
         var options = config.ExchangeOptionsFor(handler.Chain).ToList();
+        // NEAR Intents sets temporary minimums per network: hide the buttons on invoices it recently refused as too small.
+        var chosenBefore = intents.Chosen(context.InvoiceEntity.Id);
+        options = options.Where(o => o == chosenBefore || !intents.BelowMinimum(handler.Chain.IntentsNetworkCode, accounting.Due)).ToList();
         var chosen = intents.Chosen(context.InvoiceEntity.Id) is { } c && options.Contains(c) ? c : null;
         if (chosen is not null)
             ModifyForDeposit(context, config, chosen, address, accounting);

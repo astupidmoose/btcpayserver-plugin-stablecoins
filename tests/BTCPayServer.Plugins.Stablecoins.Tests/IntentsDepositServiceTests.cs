@@ -20,6 +20,7 @@ public class IntentsDepositServiceTests
         public List<JObject> Quotes { get; } = new();
         public string Status { get; set; } = "PENDING_DEPOSIT";
         public string? Authorization { get; private set; }
+        public decimal? MinimumUsd { get; set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -28,13 +29,18 @@ public class IntentsDepositServiceTests
             string json;
             if (path == "/v0/tokens")
                 json = """
-                [{"assetId":"nep141:btc.omft.near","decimals":8,"blockchain":"btc","symbol":"BTC"},
+                [{"assetId":"nep141:btc.omft.near","decimals":8,"blockchain":"btc","symbol":"BTC","price":60000},
                  {"assetId":"nep141:pol-usdc","decimals":6,"blockchain":"pol","symbol":"USDC"},
                  {"assetId":"nep141:pol-usdce","decimals":6,"blockchain":"pol","symbol":"USDC.e"},
                  {"assetId":"nep141:bsc-usdc","decimals":18,"blockchain":"bsc","symbol":"USDC"},
                  {"assetId":"nep141:eth-usdc-a","decimals":6,"blockchain":"eth","symbol":"USDC"},
                  {"assetId":"nep141:eth-usdc-b","decimals":6,"blockchain":"eth","symbol":"USDC"}]
                 """;
+            else if (path == "/v0/quote" && MinimumUsd is { } min)
+                return new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent(new JObject { ["message"] = $"Temporary swap limits: minimum swap amount is ${min:#,0}" }.ToString())
+                };
             else if (path == "/v0/quote")
             {
                 var body = JObject.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
@@ -114,6 +120,24 @@ public class IntentsDepositServiceTests
         Assert.Equal(BtcAddress, quote["recipient"]!.ToString());
         Assert.Equal(Config().RefundEvm, quote["refundTo"]!.ToString());
         Assert.Equal("Bearer jwt", fake.Authorization);
+    }
+
+    [Fact]
+    public async Task HidesTheOptionOnInvoicesBelowTheNetworksTemporaryMinimum()
+    {
+        Assert.Equal(1000m, IntentsDepositService.ParseMinimumUsd("NEAR Intents returned HTTP 400: Temporary swap limits: minimum swap amount is $1,000"));
+        Assert.Null(IntentsDepositService.ParseMinimumUsd("NEAR Intents returned HTTP 401"));
+
+        var (service, fake) = Create(new FakeOneClick { MinimumUsd = 100m });
+        Assert.False(service.BelowMinimum("pol", 0.001m));
+        service.Select(Usdc, Config(), "inv9", "pol");
+        var status = await Settle(service, "inv9");
+        Assert.Equal(IntentsState.Failed, status.State);
+        Assert.Contains("larger orders", status.Error);
+        // 0.001 BTC is $60 at the token list's price: below $100 on Polygon, not elsewhere.
+        Assert.True(service.BelowMinimum("pol", 0.001m));
+        Assert.False(service.BelowMinimum("pol", 0.002m));
+        Assert.False(service.BelowMinimum("eth", 0.001m));
     }
 
     [Fact]

@@ -60,7 +60,8 @@ public class OneClickClient(HttpClient http)
         {
         }
         if (!res.IsSuccessStatusCode || json is null)
-            throw new OneClickException((int)res.StatusCode, json?["message"]?.ToString() ?? $"NEAR Intents returned HTTP {(int)res.StatusCode}");
+            throw new OneClickException((int)res.StatusCode, $"NEAR Intents returned HTTP {(int)res.StatusCode}" +
+                (json?["message"]?.ToString() is { Length: > 0 } message ? $": {message}" : ""));
         return json;
     }
 }
