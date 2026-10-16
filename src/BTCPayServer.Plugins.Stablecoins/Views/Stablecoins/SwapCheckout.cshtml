@@ -53,14 +53,13 @@
     </div>
 </template>
 
-@* The "from exchange" options, when they are not tabs (see SwapCheckoutExchangeOptions). *@
+@* "Send USDC from an exchange" under a token checkout's wallet panel, and the way back to it. *@
 <template id="stablecoins-exchange-buttons">
-    <div class="d-flex flex-column gap-2 mt-4" v-if="model.stablecoinsExchange && model.stablecoinsExchange.length">
-        <button type="button" v-for="x in model.stablecoinsExchange" :key="x.paymentMethodId"
-                class="btn"
-                :class="model.paymentMethodId === x.paymentMethodId ? 'btn-primary' : 'btn-outline-secondary'"
-                v-on:click.prevent="$root.changePaymentMethod(x.paymentMethodId)"
-                v-text="x.label"></button>
+    <div class="d-flex flex-column gap-2 mt-4" v-if="x && x.options && x.options.length">
+        <button type="button" v-for="o in x.options" :key="o.code" class="btn" :disabled="busy"
+                :class="x.chosen === o.code ? 'btn-primary' : 'btn-outline-secondary'"
+                v-on:click.prevent="choose(o.code)" v-text="o.label"></button>
+        <button type="button" v-if="x.chosen" class="btn btn-link" :disabled="busy" v-on:click.prevent="choose(null)">Pay from a wallet instead</button>
     </div>
 </template>
 
@@ -217,7 +216,27 @@
 
         Vue.component('stablecoins-exchange-buttons', {
             props: ['model'],
-            template: '#stablecoins-exchange-buttons'
+            template: '#stablecoins-exchange-buttons',
+            data () { return { busy: false }; },
+            computed: {
+                x () { return this.model.@SwapToBtcCheckoutModelExtension.ExchangeDataKey; }
+            },
+            methods: {
+                async choose (option) {
+                    if (this.x.chosen === option) return;
+                    this.busy = true;
+                    try {
+                        await fetch(this.x.chooseUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                            body: JSON.stringify({ option })
+                        });
+                        if (this.$root && this.$root.fetchData) await this.$root.fetchData();
+                    } finally {
+                        this.busy = false;
+                    }
+                }
+            }
         });
 
         Vue.component('stablecoins-network-picker', {

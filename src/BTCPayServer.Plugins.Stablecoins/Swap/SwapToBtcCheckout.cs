@@ -64,12 +64,32 @@ public class SwapToBtcCheckoutModelExtension(
         model.NetworkFee = 0;
         model.TxCountForFee = 0;
         if (handler.Chain.Provider == SwapProvider.Thorchain)
+        {
             ModifyForCoin(context, config, address, accounting);
-        else if (handler.Chain.Provider == SwapProvider.Intents)
-            ModifyForDeposit(context, config, address, accounting);
+            return;
+        }
+
+        // Token checkouts also offer "Send USDC from an exchange": a deposit address paid into this checkout's BTC address.
+        var options = config.EnabledExchangeOptions().ToList();
+        var chosen = intents.Chosen(context.InvoiceEntity.Id) is { } c && options.Contains(c) ? c : null;
+        if (chosen is not null)
+            ModifyForDeposit(context, config, chosen, address, accounting);
         else
             ModifyForTokens(context, config, address, accounting);
+        if (options.Count > 0 && context.InvoiceEntity.Status == InvoiceStatus.New && accounting.Due > 0m)
+            model.AdditionalData[ExchangeDataKey] = new JObject
+            {
+                ["chooseUrl"] = context.UrlHelper.Content($"~/plugins/stablecoins/deposits/{context.InvoiceEntity.Id}/{handler.PaymentMethodId}/option"),
+                ["chosen"] = chosen?.Code,
+                ["options"] = new JArray(options.Select(o => new JObject
+                {
+                    ["code"] = o.Code,
+                    ["label"] = $"Send {o.Ticker} from an exchange"
+                }))
+            };
     }
+
+    public const string ExchangeDataKey = "stablecoinsExchange";
 
     void ModifyForCoin(CheckoutModelContext context, SwapToBtcPaymentMethodConfig config, string btcAddress, PaymentMethodAccounting accounting)
     {
@@ -123,9 +143,9 @@ public class SwapToBtcCheckoutModelExtension(
     /// BTCPay's own on-chain checkout body, with a network picker above it.
     /// Until a network is picked, the amount shows in the invoice's currency; then in the coin, with its deposit address.
     /// </summary>
-    void ModifyForDeposit(CheckoutModelContext context, SwapToBtcPaymentMethodConfig config, string btcAddress, PaymentMethodAccounting accounting)
+    void ModifyForDeposit(CheckoutModelContext context, SwapToBtcPaymentMethodConfig config, SwapSourceChain chain, string btcAddress,
+        PaymentMethodAccounting accounting)
     {
-        var chain = handler.Chain;
         var model = context.Model;
         var invoice = context.InvoiceEntity;
         var rate = context.Prompt.Rate;
@@ -149,7 +169,7 @@ public class SwapToBtcCheckoutModelExtension(
         {
             ["symbol"] = chain.Ticker,
             ["networks"] = new JArray(networks.Select(n => new JObject { ["code"] = n.Code, ["name"] = n.Name })),
-            ["selectUrl"] = context.UrlHelper.Content($"~/plugins/stablecoins/deposits/{invoice.Id}/{handler.PaymentMethodId}/network")
+            ["selectUrl"] = context.UrlHelper.Content($"~/plugins/stablecoins/deposits/{invoice.Id}/{handler.PaymentMethodId}/{chain.Code}/network")
         };
         model.AdditionalData["stablecoinsDeposit"] = data;
         if (invoice.Status != InvoiceStatus.New || accounting.Due <= 0m)
@@ -183,6 +203,7 @@ public class SwapToBtcCheckoutModelExtension(
             model.Rate = displayFormatter.Currency(rate / perBtc, invoice.Currency, DisplayFormatter.CurrencyFormat.Symbol);
         model.Address = payment.Address;
         model.InvoiceBitcoinUrl = model.InvoiceBitcoinUrlQR = payment.Address;
+        model.CryptoImage = context.UrlHelper.Content("~/" + chain.Image);
         data["memo"] = payment.Memo;
     }
 

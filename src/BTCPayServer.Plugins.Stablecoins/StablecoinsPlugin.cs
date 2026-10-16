@@ -48,7 +48,7 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
         services.AddSingleton<Intents.IntentsDepositService>();
 
         var btcTxLink = networkType == ChainName.Mainnet ? "https://mempool.space/tx/{0}" : "https://mempool.space/testnet/tx/{0}";
-        foreach (var source in SwapSourceChain.All)
+        foreach (var source in SwapSourceChain.PaymentMethods)
         {
             services.AddSingleton(provider => ActivatorUtilities.CreateInstance<SwapToBtcPaymentMethodHandler>(provider, source));
             services.AddSingleton<IPaymentMethodHandler>(provider => Handler(provider, source));
@@ -57,7 +57,6 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
             services.AddDefaultPrettyName(source.PaymentMethodId, source.Name);
             services.AddTransactionLinkProvider(source.PaymentMethodId, new DefaultTransactionLinkProvider(btcTxLink));
         }
-        services.AddSingleton<IGlobalCheckoutModelExtension, SwapCheckoutExchangeOptions>();
         services.AddStartupTask<LegacyIdMigration>();
         services.AddSingleton<SwapToBtcListener>();
         services.AddHostedService(p => p.GetRequiredService<SwapToBtcListener>());

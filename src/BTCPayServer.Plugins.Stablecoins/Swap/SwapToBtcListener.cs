@@ -66,7 +66,7 @@ public class SwapToBtcListener(
     }
 
     IEnumerable<SwapToBtcPaymentMethodHandler> SwapHandlers =>
-        SwapSourceChain.All
+        SwapSourceChain.PaymentMethods
             .Select(c => handlers.TryGetValue(c.PaymentMethodId, out var h) ? h as SwapToBtcPaymentMethodHandler : null)
             .OfType<SwapToBtcPaymentMethodHandler>();
 

@@ -68,6 +68,8 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
     }
 
     readonly ConcurrentDictionary<string, Entry> _entries = new();
+    /// <summary>The exchange option (USDC, USDT) each invoice's checkout shows instead of the wallet panel.</summary>
+    readonly ConcurrentDictionary<string, (string Code, DateTimeOffset At)> _chosen = new();
     readonly ConcurrentDictionary<string, (DateTimeOffset At, List<OneClickToken> Tokens)> _tokens = new();
 
     /// <summary>Settable so tests do not wait.</summary>
@@ -82,6 +84,18 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
     /// <summary>Used by tests to wait for background work.</summary>
     public Task Pending(string invoiceId, SwapSourceChain chain) =>
         _entries.TryGetValue(Key(invoiceId, chain), out var e) && e.Running is { } t ? t : Task.CompletedTask;
+
+    /// <summary>The customer tapped "Send USDC from an exchange" (or went back to the wallet panel, with null).</summary>
+    public void Choose(string invoiceId, SwapSourceChain? option)
+    {
+        if (option is null)
+            _chosen.TryRemove(invoiceId, out _);
+        else
+            _chosen[invoiceId] = (option.Code, Now());
+    }
+
+    public SwapSourceChain? Chosen(string invoiceId) =>
+        _chosen.TryGetValue(invoiceId, out var c) ? SwapSourceChain.ExchangeOptions.FirstOrDefault(o => o.Code == c.Code) : null;
 
     /// <summary>The customer picked a network. A new pick (or a retry after a refund) starts a new quote.</summary>
     public bool Select(SwapSourceChain chain, SwapToBtcPaymentMethodConfig config, string invoiceId, string network)
@@ -283,5 +297,7 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
     {
         foreach (var key in _entries.Where(e => now - e.Value.Touched > ForgetAfter).Select(e => e.Key).ToList())
             _entries.TryRemove(key, out _);
+        foreach (var key in _chosen.Where(e => now - e.Value.At > ForgetAfter).Select(e => e.Key).ToList())
+            _chosen.TryRemove(key, out _);
     }
 }
