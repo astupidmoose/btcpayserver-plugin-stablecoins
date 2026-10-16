@@ -107,9 +107,9 @@ public class SwapToBtcCheckoutModelExtension(
         model.OrderAmount = Format(payment.Amount + (accounting.Paid > 0m ? accounting.Paid * perBtc : 0m), chain.Decimals);
         if (context.Prompt.Rate > 0m)
             model.Rate = displayFormatter.Currency(context.Prompt.Rate / perBtc, invoice.Currency, DisplayFormatter.CurrencyFormat.Symbol);
-        var uri = chain.UriScheme is { } scheme ? $"{scheme}:{payment.Address}?amount={amount}" : payment.Address;
-        model.InvoiceBitcoinUrl = model.InvoiceBitcoinUrlQR = uri;
-        model.ShowPayInWalletButton = model.ShowPayInWalletButton && chain.UriScheme is not null;
+        var uri = chain.PaymentUri(payment.Address, payment.Amount, amount);
+        model.InvoiceBitcoinUrl = model.InvoiceBitcoinUrlQR = uri ?? payment.Address;
+        model.ShowPayInWalletButton = model.ShowPayInWalletButton && uri is not null;
     }
 
     void ModifyForTokens(CheckoutModelContext context, SwapToBtcPaymentMethodConfig config, string btcAddress, PaymentMethodAccounting accounting)

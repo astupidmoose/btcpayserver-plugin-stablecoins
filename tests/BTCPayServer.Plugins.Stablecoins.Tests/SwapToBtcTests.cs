@@ -42,10 +42,26 @@ public class SwapToBtcTests
     public void ThorchainCoversNativeCoinsButNotBitcoinCash()
     {
         var thor = SwapSourceChain.All.Where(c => c.Provider == SwapProvider.Thorchain).ToList();
-        Assert.Equal(["LTC.LTC", "DOGE.DOGE", "ZEC.ZEC", "GAIA.ATOM", "XRP.XRP"], thor.Select(c => c.ThorAsset));
+        Assert.Equal(["LTC.LTC", "DOGE.DOGE", "ZEC.ZEC", "GAIA.ATOM", "XRP.XRP", "ETH.ETH", "BASE.ETH", "BSC.BNB", "AVAX.AVAX", "SOL.SOL", "TRON.TRX"],
+            thor.Select(c => c.ThorAsset));
+        Assert.Equal(SwapSourceChain.All.Length, SwapSourceChain.All.Select(c => c.Code).Distinct().Count());
+        Assert.Equal(SwapSourceChain.All.Length, SwapSourceChain.All.Select(c => c.Name).Distinct().Count());
+        Assert.Equal("THOR_ETH", SwapSourceChain.Find("ETH")!.PaymentMethodId.ToString());
         Assert.DoesNotContain(SwapSourceChain.All, c => c.ThorAsset?.StartsWith("BCH.") is true || c.Code.Contains("BCH"));
         Assert.All(thor, c => Assert.False(string.IsNullOrEmpty(c.Ticker)));
         Assert.Equal("GAIA", SwapSourceChain.Find("COSMOS")!.ThorChain);
+    }
+
+    [Theory]
+    [InlineData("ETH", "0.01230042", "ethereum:0xvault@1?value=12300420000000000")]
+    [InlineData("BASEETH", "0.5", "ethereum:0xvault@8453?value=500000000000000000")]
+    [InlineData("SOL", "1.20000042", "solana:0xvault?amount=1.20000042")]
+    [InlineData("LITECOIN", "1.5", "litecoin:0xvault?amount=1.5")]
+    [InlineData("TRX", "100.000042", null)]
+    public void CoinPaymentLinksMatchWhatWalletsScan(string code, string amount, string? expected)
+    {
+        var a = decimal.Parse(amount, System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(expected, SwapSourceChain.Find(code)!.PaymentUri("0xvault", a, amount));
     }
 
     [Theory]
