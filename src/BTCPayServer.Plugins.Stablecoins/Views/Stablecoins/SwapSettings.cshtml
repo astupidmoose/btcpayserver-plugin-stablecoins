@@ -107,7 +107,55 @@
                 <div class="form-text">0 charges the customer nothing extra.</div>
             </div>
 
-            <h4 class="mt-5 mb-2">Both</h4>
+            <h4 class="mt-5 mb-2">USDC and USDT from any wallet or exchange, through NEAR Intents</h4>
+            <p class="text-secondary">
+                The customer picks the network they send from, then gets a QR code, a one-time address and an exact amount, like any coin invoice.
+                It works from exchanges too, since nothing needs to be connected or signed.
+                <a href="https://near-intents.org" target="_blank" rel="noreferrer noopener">NEAR Intents</a> swaps what arrives to BTC for this invoice.
+                The deposit address belongs to NEAR Intents, which holds the coins until the swap runs, usually a few minutes.
+            </p>
+            <div class="form-group">
+                @for (var i = 0; i < Model.Chains.Count; i++)
+                {
+                    if (Model.Chains[i].Provider != SwapProvider.Intents) continue;
+                    <partial name="/Views/Stablecoins/_SwapChainToggle.cshtml" model="(Model, i)" />
+                }
+            </div>
+            <div class="form-group">
+                <label asp-for="IntentsApiKey" class="form-label"></label>
+                <input asp-for="IntentsApiKey" class="form-control font-monospace" autocomplete="off" spellcheck="false" />
+                <div class="form-text">From NEAR Intents (see the Authentication section of their <a href="https://github.com/defuse-protocol/one-click-sdk-typescript#authentication" target="_blank" rel="noreferrer noopener">1Click SDK</a>). It stays on this server.</div>
+            </div>
+            <div class="form-group">
+                <label asp-for="RefundEvm" class="form-label"></label>
+                <input asp-for="RefundEvm" class="form-control font-monospace" autocomplete="off" spellcheck="false" placeholder="0x…" />
+                <span asp-validation-for="RefundEvm" class="text-danger"></span>
+            </div>
+            <div class="form-group">
+                <label asp-for="RefundSolana" class="form-label"></label>
+                <input asp-for="RefundSolana" class="form-control font-monospace" autocomplete="off" spellcheck="false" />
+                <span asp-validation-for="RefundSolana" class="text-danger"></span>
+            </div>
+            <div class="form-group">
+                <label asp-for="RefundTron" class="form-label"></label>
+                <input asp-for="RefundTron" class="form-control font-monospace" autocomplete="off" spellcheck="false" placeholder="T…" />
+                <span asp-validation-for="RefundTron" class="text-danger"></span>
+                <div class="form-text">
+                    Your own wallets. A payment that cannot be swapped (too little sent, or sent after the deadline), and anything sent above the amount,
+                    is returned here, not to the customer: an exchange withdrawal has no return address. Refund the customer from it.
+                    Only networks with a refund address are offered.
+                </div>
+            </div>
+            <div class="form-group">
+                <label asp-for="IntentsSlippageBps" class="form-label"></label>
+                <input asp-for="IntentsSlippageBps" type="number" min="1" max="1000" step="1" class="form-control" />
+                <span asp-validation-for="IntentsSlippageBps" class="text-danger"></span>
+                <div class="form-text">The amount shown includes this margin so BTC price moves don't fail the swap. Whatever it doesn't use comes back to your refund address. 50 = 0.5%.</div>
+            </div>
+            <input type="hidden" asp-for="IntentsUrl" />
+            <input type="hidden" asp-for="ThorMemolessUrl" />
+
+            <h4 class="mt-5 mb-2">All of them</h4>
             <div class="form-group">
                 <label asp-for="BufferPercent" class="form-label"></label>
                 <input asp-for="BufferPercent" type="number" min="0" max="5" step="0.1" class="form-control" />

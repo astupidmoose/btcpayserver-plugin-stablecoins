@@ -25,18 +25,21 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
     ILogger<UISwapStoreController> logger) : Controller
 {
     public const string SettingsView = StablecoinsPlugin.ViewsDirectory + "/SwapSettings.cshtml";
+    /// <summary>The settings themselves, kept apart from the payment methods so turning every chain off keeps them.</summary>
+    public const string StoreSettingName = "Stablecoins.SwapSettings";
 
     StoreData StoreData => HttpContext.GetStoreData();
 
     [HttpGet("")]
-    public IActionResult SwapSettings()
+    public async Task<IActionResult> SwapSettings()
     {
         var store = StoreData;
         var excluded = store.GetStoreBlob().GetExcludedPaymentMethods();
         var configs = SwapSourceChain.All
             .Select(c => (Chain: c, Config: store.GetPaymentMethodConfig<SwapToBtcPaymentMethodConfig>(c.PaymentMethodId, handlers)))
             .ToList();
-        var any = configs.Select(c => c.Config).FirstOrDefault(c => c is not null) ?? new SwapToBtcPaymentMethodConfig();
+        var any = await storeRepository.GetSettingAsync<SwapToBtcPaymentMethodConfig>(store.Id, StoreSettingName) ??
+                  configs.Select(c => c.Config).FirstOrDefault(c => c is not null) ?? new SwapToBtcPaymentMethodConfig();
         return View(SettingsView, new SwapSettingsViewModel
         {
             HasBtcWallet = store.GetDerivationSchemeSettings(handlers, "BTC") is not null,
@@ -49,6 +52,13 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             ThorAffiliate = any.ThorAffiliate,
             ThorAffiliateBps = any.ThorAffiliateBps,
             ThorToleranceBps = any.ThorToleranceBps,
+            IntentsApiKey = any.IntentsApiKey,
+            RefundEvm = any.RefundEvm,
+            RefundSolana = any.RefundSolana,
+            RefundTron = any.RefundTron,
+            IntentsSlippageBps = any.IntentsSlippageBps,
+            IntentsUrl = any.IntentsUrl,
+            ThorMemolessUrl = any.MemolessUrl,
             Chains = configs.Select(c => new SwapChainViewModel
             {
                 Code = c.Chain.Code,
@@ -77,13 +87,29 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             ThornodeUrl = string.IsNullOrWhiteSpace(vm.ThornodeUrl) ? null : vm.ThornodeUrl.Trim(),
             ThorAffiliate = string.IsNullOrWhiteSpace(vm.ThorAffiliate) ? null : vm.ThorAffiliate.Trim(),
             ThorAffiliateBps = vm.ThorAffiliateBps,
-            ThorToleranceBps = vm.ThorToleranceBps
+            ThorToleranceBps = vm.ThorToleranceBps,
+            MemolessUrl = Clean(vm.ThorMemolessUrl),
+            IntentsApiKey = Clean(vm.IntentsApiKey),
+            IntentsUrl = Clean(vm.IntentsUrl),
+            RefundEvm = Clean(vm.RefundEvm),
+            RefundSolana = Clean(vm.RefundSolana),
+            RefundTron = Clean(vm.RefundTron),
+            IntentsSlippageBps = vm.IntentsSlippageBps
         };
         foreach (var (field, message) in SwapToBtcPaymentMethodHandler.Validate(config))
             ModelState.AddModelError(field == nameof(config.Fee) ? nameof(vm.FeePercent) : field, message);
         if (string.IsNullOrEmpty(config.ThorAffiliate) && config.ThorAffiliateBps > 0)
             ModelState.AddModelError(nameof(vm.ThorAffiliate), "Set the THORName that receives the affiliate fee, or set the fee to 0.");
+        if (config.RefundEvm is { } evm && !IsEvmAddress(evm))
+            ModelState.AddModelError(nameof(vm.RefundEvm), "The EVM refund address should be 0x followed by 40 hex characters.");
+        if (config.RefundSolana is { } sol && !IsBase58(sol, 32, 44))
+            ModelState.AddModelError(nameof(vm.RefundSolana), "That does not look like a Solana address.");
+        if (config.RefundTron is { } tron && !(tron.StartsWith('T') && IsBase58(tron, 34, 34)))
+            ModelState.AddModelError(nameof(vm.RefundTron), "A Tron address starts with T and has 34 characters.");
         var enabled = vm.Chains.Where(c => c.Enabled).Select(c => SwapSourceChain.Find(c.Code)).OfType<SwapSourceChain>().ToHashSet();
+        foreach (var chain in enabled.Where(c => c.Provider == SwapProvider.Intents))
+            if (!Intents.IntentsDepositService.Networks(chain, config).Any())
+                ModelState.AddModelError(nameof(vm.RefundEvm), $"Add at least one refund address to offer {chain.Name}: NEAR Intents returns payments it cannot swap there.");
         if (enabled.Count > 0 && !vm.HasBtcWallet)
             ModelState.AddModelError(string.Empty, "Set up the store's BTC on-chain wallet first: swapped BTC is paid into it.");
         if (!ModelState.IsValid)
@@ -110,6 +136,7 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         }
         store.SetStoreBlob(blob);
         await storeRepository.UpdateStore(store);
+        await storeRepository.UpdateSetting(store.Id, StoreSettingName, config);
         logger.LogInformation("Swap settings of store {StoreId} saved, {Count} chains enabled", store.Id, enabled.Count);
 
         TempData.SetStatusMessageModel(new StatusMessageModel
@@ -121,6 +148,14 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         });
         return RedirectToAction(nameof(SwapSettings), new { storeId = store.Id });
     }
+
+    static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    public static bool IsEvmAddress(string value) =>
+        value.Length == 42 && value.StartsWith("0x", System.StringComparison.OrdinalIgnoreCase) && value.Skip(2).All(System.Uri.IsHexDigit);
+
+    static bool IsBase58(string value, int min, int max) =>
+        value.Length >= min && value.Length <= max && value.All(c => "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".Contains(c));
 
     static void FillChains(SwapSettingsViewModel vm)
     {
@@ -171,6 +206,26 @@ public class SwapSettingsViewModel
     [Display(Name = "THORChain price tolerance (basis points)")]
     [Range(10, 5000)]
     public int ThorToleranceBps { get; set; } = SwapDefaults.ThorToleranceBps;
+
+    [Display(Name = "NEAR Intents API key")]
+    public string? IntentsApiKey { get; set; }
+
+    [Display(Name = "Refund address for EVM networks (Ethereum, Base, Polygon...)")]
+    public string? RefundEvm { get; set; }
+
+    [Display(Name = "Refund address on Solana")]
+    public string? RefundSolana { get; set; }
+
+    [Display(Name = "Refund address on Tron")]
+    public string? RefundTron { get; set; }
+
+    [Display(Name = "Stablecoin price tolerance (basis points)")]
+    [Range(1, 1000)]
+    public int IntentsSlippageBps { get; set; } = SwapDefaults.IntentsSlippageBps;
+
+    /// <summary>Not on the page; kept so a save does not drop a custom endpoint (used for testing).</summary>
+    public string? IntentsUrl { get; set; }
+    public string? ThorMemolessUrl { get; set; }
 
     public List<SwapChainViewModel> Chains { get; set; } = new();
 }

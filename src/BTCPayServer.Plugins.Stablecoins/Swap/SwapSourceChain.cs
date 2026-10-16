@@ -11,8 +11,18 @@ public enum SwapProvider
     /// <summary>Tokens on EVM chains, Solana and Tron, through the LI.FI widget and the customer's connected wallet.</summary>
     Lifi,
     /// <summary>Native coins through THORChain: the customer sends an exact amount to a THORChain vault, no memo (memoless deposit).</summary>
-    Thorchain
+    Thorchain,
+    /// <summary>
+    /// Stablecoins through NEAR Intents' 1Click API: the customer picks a network and sends an exact amount to a
+    /// one-time deposit address, from any wallet or exchange.
+    /// </summary>
+    Intents
 }
+
+public enum AddressFamily { Evm, Solana, Tron }
+
+/// <summary>A network a stablecoin can be sent on, by its NEAR Intents blockchain code (eth, pol, sol...).</summary>
+public record IntentsNetwork(string Code, string Name, AddressFamily Family, string Image);
 
 /// <summary>
 /// A chain customers can pay from. Each one is its own BTCPay payment method, so
@@ -39,13 +49,16 @@ public record SwapSourceChain
     /// <summary>The coin's icon; BTCPay's own where it has one, so the checkout looks like its own coin invoices.</summary>
     public string? CoinImage { get; init; }
 
+    /// <summary>Networks the token can be sent on (NEAR Intents only).</summary>
+    public IReadOnlyList<IntentsNetwork> Networks { get; init; } = [];
+
     public string? ThorChain => ThorAsset?.Split('.')[0];
 
     /// <summary>
     /// LIFI_ETHEREUM or THOR_LITECOIN. Underscores, not dashes: the WooCommerce BTCPay plugin turns every '-' into '_'
     /// in the payment method it sends back when creating the invoice, and BTCPay only maps that back for built-in coins.
     /// </summary>
-    public PaymentMethodId PaymentMethodId => new($"{(Provider == SwapProvider.Lifi ? "LIFI" : "THOR")}_{Code}");
+    public PaymentMethodId PaymentMethodId => new($"{Provider switch { SwapProvider.Lifi => "LIFI", SwapProvider.Thorchain => "THOR", _ => "NEAR" }}_{Code}");
 
     public string Image => CoinImage ?? $"Resources/chains/{Code.ToLowerInvariant()}.svg";
 
@@ -68,6 +81,19 @@ public record SwapSourceChain
 
     static SwapSourceChain Thor(string code, string name, string asset, string ticker, int decimals, string? uriScheme, string? image = null, long? evmChainId = null) =>
         new() { Code = code, Name = name, Provider = SwapProvider.Thorchain, ThorAsset = asset, Ticker = ticker, Decimals = decimals, UriScheme = uriScheme, CoinImage = image, EvmChainId = evmChainId };
+
+    static SwapSourceChain Intents(string symbol, params IntentsNetwork[] networks) =>
+        new() { Code = symbol, Name = symbol, Provider = SwapProvider.Intents, Ticker = symbol, Networks = networks, Decimals = 6 };
+
+    static readonly IntentsNetwork Eth = new("eth", "Ethereum", AddressFamily.Evm, "Resources/chains/ethereum.svg");
+    static readonly IntentsNetwork Base = new("base", "Base", AddressFamily.Evm, "Resources/chains/base.svg");
+    static readonly IntentsNetwork Arb = new("arb", "Arbitrum", AddressFamily.Evm, "Resources/chains/arbitrum.svg");
+    static readonly IntentsNetwork Op = new("op", "Optimism", AddressFamily.Evm, "Resources/chains/optimism.svg");
+    static readonly IntentsNetwork Pol = new("pol", "Polygon", AddressFamily.Evm, "Resources/chains/polygon.svg");
+    static readonly IntentsNetwork Bsc = new("bsc", "BNB Smart Chain (BEP20)", AddressFamily.Evm, "Resources/chains/bsc.svg");
+    static readonly IntentsNetwork Avax = new("avax", "Avalanche C-Chain", AddressFamily.Evm, "Resources/chains/avalanche.svg");
+    static readonly IntentsNetwork Sol = new("sol", "Solana", AddressFamily.Solana, "Resources/chains/solana.svg");
+    static readonly IntentsNetwork Tron = new("tron", "Tron (TRC20)", AddressFamily.Tron, "Resources/chains/tron.svg");
 
     public const long SolanaLifiChainId = 1151111081099710;
     public const long TronLifiChainId = 728126428;
@@ -97,6 +123,9 @@ public record SwapSourceChain
         Thor("AVAX", "AVAX", "AVAX.AVAX", "AVAX", 8, null, "Resources/chains/avalanche.svg", 43114),
         Thor("SOL", "SOL", "SOL.SOL", "SOL", 8, "solana", "Resources/chains/solana.svg"),
         Thor("TRX", "TRX", "TRON.TRX", "TRX", 6, null, "Resources/chains/tron.svg"),
+        // Stablecoins from any wallet or exchange: one payment method per coin, the network is picked at checkout.
+        Intents("USDC", Eth, Base, Arb, Pol, Sol, Bsc, Avax, Op) with { CoinImage = "Resources/chains/usdc.svg" },
+        Intents("USDT", Eth, Tron, Bsc, Sol, Pol, Arb, Avax) with { CoinImage = "Resources/chains/usdt.svg" },
     ];
 
     static readonly Dictionary<PaymentMethodId, SwapSourceChain> ByPmi = All.ToDictionary(c => c.PaymentMethodId);

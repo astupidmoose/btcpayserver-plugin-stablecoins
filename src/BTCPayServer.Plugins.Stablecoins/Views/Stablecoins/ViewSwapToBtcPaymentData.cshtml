@@ -41,7 +41,7 @@
             {
                 <tr>
                     <td>
-                        @p.Chain.Name via @(p.Chain.Provider == SwapProvider.Lifi ? "LI.FI" : "THORChain")
+                        @p.Chain.Name via @(p.Chain.Provider switch { SwapProvider.Lifi => "LI.FI", SwapProvider.Thorchain => "THORChain", _ => "NEAR Intents" })
                         @if (p.Data.SourceTxId is { } source)
                         {
                             <div class="small"><vc:truncate-center text="@source" link="@UISwapCheckoutController.ExplorerLink(p.Chain, source)" classes="truncate-center-id" /></div>
