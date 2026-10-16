@@ -6,7 +6,6 @@ using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Hosting;
 using BTCPayServer.Payments;
 using BTCPayServer.Plugins.Stablecoins.Swap;
-using BTCPayServer.Plugins.Stablecoins.Thorchain;
 using BTCPayServer.Services;
 using Microsoft.Extensions.DependencyInjection;
 using NBitcoin;
@@ -17,8 +16,7 @@ namespace BTCPayServer.Plugins.Stablecoins;
 /// <summary>
 /// Pay a BTC invoice from another chain: one payment method per source chain, each paying a fresh
 /// address from the store's own BTC wallet. Tokens on EVM chains, Solana and Tron go through LI.FI;
-/// native coins go through THORChain;
-/// USDC and USDT from any wallet or exchange go through NEAR Intents deposit addresses.
+/// USDC and USDT from an exchange go through NEAR Intents deposit addresses, inside those same checkouts.
 /// </summary>
 public class StablecoinsPlugin : BaseBTCPayServerPlugin
 {
@@ -34,14 +32,6 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
         var pluginServices = (PluginServiceCollection)services;
         var networkType = pluginServices.BootstrapServices.GetRequiredService<NBXplorerNetworkProvider>().NetworkType;
 
-        services.AddHttpClient(ThornodeClient.HttpClientName);
-        services.AddSingleton(provider => new ThornodeClient(
-            provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(ThornodeClient.HttpClientName)));
-        services.AddSingleton<ThorQuoteService>();
-        services.AddHttpClient(MemolessClient.HttpClientName);
-        services.AddSingleton(provider => new MemolessClient(
-            provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(MemolessClient.HttpClientName)));
-        services.AddSingleton<ThorDepositService>();
         services.AddHttpClient(Intents.OneClickClient.HttpClientName);
         services.AddSingleton(provider => new Intents.OneClickClient(
             provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(Intents.OneClickClient.HttpClientName)));

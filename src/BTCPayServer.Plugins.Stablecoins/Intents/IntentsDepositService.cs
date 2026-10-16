@@ -10,7 +10,6 @@ using System.Threading.Tasks;
 using BTCPayServer.Data;
 using BTCPayServer.Logging;
 using BTCPayServer.Plugins.Stablecoins.Swap;
-using BTCPayServer.Plugins.Stablecoins.Thorchain;
 using BTCPayServer.Services.Invoices;
 using Microsoft.Extensions.Logging;
 
@@ -42,10 +41,10 @@ public record IntentsStatus(IntentsState State, string? Network, IntentsPayment?
 }
 
 /// <summary>
-/// Prepares a NEAR Intents deposit for an invoice once the customer picks a network: asks 1Click for an
+/// Prepares a NEAR Intents deposit for an invoice on the token checkout's chain: asks 1Click for an
 /// exact-output quote (the BTC due, to this invoice's address) and shows its one-time deposit address and amount.
-/// Then follows the deposit through 1Click's status endpoint. Work runs in the background, like the THORChain
-/// deposits, so a page load never waits on the API.
+/// Then follows the deposit through 1Click's status endpoint. Work runs in the background, so a page load never
+/// waits on the API.
 /// </summary>
 public class IntentsDepositService(OneClickClient client, InvoiceRepository invoiceRepository, ILogger<IntentsDepositService> logger)
 {
@@ -98,7 +97,17 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
     /// <summary>Settable so tests do not wait.</summary>
     public Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.UtcNow;
 
-    public static Uri BaseUrl(SwapToBtcPaymentMethodConfig config) => ThorQuoteService.SafeUrl(config.IntentsUrl, OneClickClient.DefaultUrl);
+    public static Uri BaseUrl(SwapToBtcPaymentMethodConfig config) => SafeUrl(config.IntentsUrl, OneClickClient.DefaultUrl);
+
+    /// <summary>https only, except plain http to this machine (a local node or a test double).</summary>
+    public static Uri SafeUrl(string? url, string fallback) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u) && (u.Scheme == Uri.UriSchemeHttps || u.Scheme == Uri.UriSchemeHttp && u.IsLoopback)
+            ? u
+            : new Uri(fallback);
+
+    /// <summary>The BTC due plus the buffer, in satoshis, rounded up.</summary>
+    public static long TargetUnits(decimal btcDue, decimal bufferPercent) =>
+        (long)decimal.Ceiling(btcDue * (1m + bufferPercent / 100m) * 100_000_000m);
 
     /// <summary>The networks this store can take the coin on: those with a refund address.</summary>
     public static IEnumerable<IntentsNetwork> Networks(SwapSourceChain chain, SwapToBtcPaymentMethodConfig config) =>
@@ -145,7 +154,7 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
     public IntentsStatus Get(SwapSourceChain chain, SwapToBtcPaymentMethodConfig config, string invoiceId, string btcAddress, decimal btcDue,
         DateTimeOffset invoiceExpiry)
     {
-        var target = ThorQuoteService.TargetUnits(btcDue, config.BufferPercent);
+        var target = TargetUnits(btcDue, config.BufferPercent);
         var now = Now();
         var entry = _entries.GetOrAdd(Key(invoiceId, chain), _ => new Entry());
         IntentsStatus result;

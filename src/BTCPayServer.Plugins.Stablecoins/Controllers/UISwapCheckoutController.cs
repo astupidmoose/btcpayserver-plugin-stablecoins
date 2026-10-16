@@ -10,7 +10,6 @@ using BTCPayServer.Data;
 using BTCPayServer.Logging;
 using BTCPayServer.Payments;
 using BTCPayServer.Plugins.Stablecoins.Swap;
-using BTCPayServer.Plugins.Stablecoins.Thorchain;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
@@ -121,10 +120,8 @@ public class UISwapCheckoutController(
     public static bool IsTransactionId(string? txHash) =>
         txHash is { Length: >= 32 and <= 128 } && txHash.All(c => char.IsAsciiLetterOrDigit(c) || c is 'x' or 'X');
 
-    /// <summary>LI.FI's explorer follows every step of a route; THORChain's explorer shows the swap and any refund.</summary>
-    public static string ExplorerLink(SwapSourceChain chain, string txHash) => chain.Provider == SwapProvider.Lifi
-        ? $"https://scan.li.fi/tx/{txHash}"
-        : $"https://runescan.io/tx/{txHash}";
+    /// <summary>LI.FI's explorer follows every step of a route.</summary>
+    public static string ExplorerLink(SwapSourceChain chain, string txHash) => $"https://scan.li.fi/tx/{txHash}";
 
     async Task Note(string invoiceId, string key, string message)
     {

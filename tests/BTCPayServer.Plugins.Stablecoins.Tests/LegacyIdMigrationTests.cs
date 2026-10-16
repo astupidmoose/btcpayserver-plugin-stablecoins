@@ -40,7 +40,7 @@ public class LegacyIdMigrationTests
         var store = new StoreData { Id = "store" };
         var settings = new JObject { ["integrator"] = "coincards", ["refundEvm"] = "0xabc" };
         store.SetPaymentMethodConfig(new PaymentMethodId("LIFI_BASE"), settings);
-        store.SetPaymentMethodConfig(new PaymentMethodId("THOR_LITECOIN"), settings);
+        store.SetPaymentMethodConfig(new PaymentMethodId("LIFI_ETHEREUM"), settings);
         store.SetPaymentMethodConfig(new PaymentMethodId("NEAR_USDC"), settings);
         store.SetPaymentMethodConfig(new PaymentMethodId("NEAR_USDT"), settings);
         var blob = store.GetStoreBlob();
@@ -53,7 +53,27 @@ public class LegacyIdMigrationTests
         Assert.Null(store.GetPaymentMethodConfig(new PaymentMethodId("NEAR_USDT")));
         Assert.False(store.GetStoreBlob().GetExcludedPaymentMethods().Match(new PaymentMethodId("NEAR_USDT")));
         Assert.Equal(new[] { "USDC" }, store.GetPaymentMethodConfig(new PaymentMethodId("LIFI_BASE"))!["exchangeOptions"]!.ToObject<string[]>());
-        Assert.Null(store.GetPaymentMethodConfig(new PaymentMethodId("THOR_LITECOIN"))!["exchangeOptions"]);
+        Assert.Equal(new[] { "USDC" }, store.GetPaymentMethodConfig(new PaymentMethodId("LIFI_ETHEREUM"))!["exchangeOptions"]!.ToObject<string[]>());
         Assert.Null(LegacyIdMigration.MoveExchangeOptions(store));
+    }
+
+    [Fact]
+    public void RemovesTheThorchainPaymentMethods()
+    {
+        var store = new StoreData { Id = "store" };
+        store.SetPaymentMethodConfig(new PaymentMethodId("LIFI_BASE"), new JObject { ["integrator"] = "coincards" });
+        store.SetPaymentMethodConfig(new PaymentMethodId("THOR_LITECOIN"), new JObject { ["integrator"] = "coincards" });
+        store.SetPaymentMethodConfig(new PaymentMethodId("THOR_ETH"), new JObject { ["integrator"] = "coincards" });
+        var blob = store.GetStoreBlob();
+        blob.SetExcluded(new PaymentMethodId("THOR_ETH"), true);
+        store.SetStoreBlob(blob);
+
+        Assert.True(LegacyIdMigration.RemoveThorchain(store));
+
+        Assert.Null(store.GetPaymentMethodConfig(new PaymentMethodId("THOR_LITECOIN")));
+        Assert.Null(store.GetPaymentMethodConfig(new PaymentMethodId("THOR_ETH")));
+        Assert.False(store.GetStoreBlob().GetExcludedPaymentMethods().Match(new PaymentMethodId("THOR_ETH")));
+        Assert.NotNull(store.GetPaymentMethodConfig(new PaymentMethodId("LIFI_BASE")));
+        Assert.False(LegacyIdMigration.RemoveThorchain(store));
     }
 }

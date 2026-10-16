@@ -5,7 +5,6 @@ using System.Globalization;
 using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
 using BTCPayServer.Plugins.Stablecoins.Intents;
-using BTCPayServer.Plugins.Stablecoins.Thorchain;
 using BTCPayServer.Services;
 using BTCPayServer.Payments;
 using BTCPayServer.Services.Invoices;
@@ -30,18 +29,15 @@ public class SwapToBtcPaymentLinkExtension(SwapToBtcPaymentMethodHandler handler
 
 /// <summary>
 /// Keeps BTCPay's own checkout (store header, amount, expiry timer, View Details).
-/// Native coins (Litecoin, Dogecoin...) look exactly like a normal BTCPay invoice in that coin: amount in the coin,
-/// QR code, address, Pay in wallet. Token chains (Ethereum, Base...) show the amount in the invoice's currency and
-/// a wallet panel. BTC, the swap and its provider never show to the customer.
+/// Token chains (Ethereum, Base...) show the amount in the invoice's currency and a wallet panel, plus
+/// "Send USDC from an exchange", which looks like a normal coin invoice. BTC, the swap and its provider never show.
 /// </summary>
 public class SwapToBtcCheckoutModelExtension(
     SwapToBtcPaymentMethodHandler handler,
-    ThorDepositService deposits,
     IntentsDepositService intents,
     DisplayFormatter displayFormatter) : ICheckoutModelExtension
 {
     public const string CheckoutBodyComponentName = "StablecoinsSwapCheckout";
-    public const string CoinStatusComponentName = "StablecoinsCoinStatus";
     /// <summary>The network picker, then BTCPay's own on-chain body.</summary>
     public const string DepositCheckoutBodyComponentName = "StablecoinsDepositCheckout";
     /// <summary>BTCPay's own on-chain checkout body, reused as is.</summary>
@@ -63,12 +59,6 @@ public class SwapToBtcCheckoutModelExtension(
         model.ShowRecommendedFee = false;
         model.NetworkFee = 0;
         model.TxCountForFee = 0;
-        if (handler.Chain.Provider == SwapProvider.Thorchain)
-        {
-            ModifyForCoin(context, config, address, accounting);
-            return;
-        }
-
         // Token checkouts also offer "Send USDC from an exchange": a deposit address paid into this checkout's BTC address.
         var options = config.ExchangeOptionsFor(handler.Chain).ToList();
         // NEAR Intents sets temporary minimums per network: hide the buttons on invoices it recently refused as too small.
@@ -93,54 +83,6 @@ public class SwapToBtcCheckoutModelExtension(
     }
 
     public const string ExchangeDataKey = "stablecoinsExchange";
-
-    void ModifyForCoin(CheckoutModelContext context, SwapToBtcPaymentMethodConfig config, string btcAddress, PaymentMethodAccounting accounting)
-    {
-        var chain = handler.Chain;
-        var model = context.Model;
-        var invoice = context.InvoiceEntity;
-        model.PaymentMethodCurrency = chain.Ticker;
-        model.Address = null;
-        model.InvoiceBitcoinUrl = model.InvoiceBitcoinUrlQR = "";
-        model.Rate = null;
-
-        if (invoice.Status != InvoiceStatus.New || accounting.Due <= 0m)
-        {
-            model.CheckoutBodyComponentName = CoinStatusComponentName;
-            model.Due = model.OrderAmount = model.Paid = "";
-            model.AdditionalData["stablecoinsCoin"] = new JObject { ["state"] = "done", ["ticker"] = chain.Ticker };
-            return;
-        }
-
-        var status = deposits.Get(chain, config, invoice.Id, btcAddress, accounting.Due);
-        if (status is not { State: ThorPaymentState.Ready, Payment: { } payment } || payment.Used)
-        {
-            model.CheckoutBodyComponentName = CoinStatusComponentName;
-            model.Due = model.OrderAmount = model.Paid = "";
-            model.AdditionalData["stablecoinsCoin"] = new JObject
-            {
-                ["state"] = status.Payment?.Used == true ? "received" : status.State == ThorPaymentState.Failed ? "failed" : "preparing",
-                ["ticker"] = chain.Ticker,
-                ["error"] = status.Error,
-                ["minutes"] = status.Payment?.TotalSwapSeconds is { } s ? (int)Math.Ceiling(s / 60.0) + 1 : null
-            };
-            return;
-        }
-
-        // The coin amount stands for the BTC still due; earlier payments are shown in the coin at the same ratio.
-        var perBtc = payment.Amount / accounting.Due;
-        var amount = Format(payment.Amount, chain.Decimals);
-        model.CheckoutBodyComponentName = BitcoinCheckoutBodyComponentName;
-        model.Address = payment.Address;
-        model.Due = amount;
-        model.Paid = accounting.Paid > 0m ? Format(accounting.Paid * perBtc, chain.Decimals) : "0";
-        model.OrderAmount = Format(payment.Amount + (accounting.Paid > 0m ? accounting.Paid * perBtc : 0m), chain.Decimals);
-        if (context.Prompt.Rate > 0m)
-            model.Rate = displayFormatter.Currency(context.Prompt.Rate / perBtc, invoice.Currency, DisplayFormatter.CurrencyFormat.Symbol);
-        var uri = chain.PaymentUri(payment.Address, payment.Amount, amount);
-        model.InvoiceBitcoinUrl = model.InvoiceBitcoinUrlQR = uri ?? payment.Address;
-        model.ShowPayInWalletButton = model.ShowPayInWalletButton && uri is not null;
-    }
 
     /// <summary>
     /// BTCPay's own on-chain checkout body, with a network picker above it.

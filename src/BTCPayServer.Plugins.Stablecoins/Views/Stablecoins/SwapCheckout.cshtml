@@ -27,24 +27,6 @@
     </div>
 </template>
 
-<template id="@SwapToBtcCheckoutModelExtension.CoinStatusComponentName">
-    <div class="payment-box text-center" v-if="coin">
-        <template v-if="coin.state === 'preparing'">
-            <span class="spinner-border spinner-border-sm text-muted" role="status"></span>
-            <p class="text-muted mt-2 mb-0">Getting your {{ coin.ticker }} payment address…</p>
-        </template>
-        <template v-else-if="coin.state === 'received'">
-            <p class="fw-semibold mb-1">{{ coin.ticker }} payment received</p>
-            <p class="text-muted small mb-0">
-                Keep this page open. It updates by itself once the payment is confirmed<span v-if="coin.minutes">, usually within {{ coin.minutes }} minutes</span>.
-            </p>
-        </template>
-        <template v-else-if="coin.state === 'failed'">
-            <div class="alert alert-warning mb-0" role="alert">{{ coin.error }}</div>
-        </template>
-    </div>
-</template>
-
 <template id="@SwapToBtcCheckoutModelExtension.DepositCheckoutBodyComponentName">
     <div>
         <stablecoins-network-picker :model="model"></stablecoins-network-picker>
@@ -289,25 +271,6 @@
                     }
                 }
             }
-        });
-
-        Vue.component(@Safe.Json(SwapToBtcCheckoutModelExtension.CoinStatusComponentName), {
-            props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
-            template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.CoinStatusComponentName),
-            data () { return { timer: null }; },
-            computed: {
-                coin () { return this.model.stablecoinsCoin; }
-            },
-            // The address is prepared in the background; ask for the updated invoice until it is ready.
-            // BTCPay's checkout only polls when its live connection is down, so this does it while needed.
-            mounted () {
-                this.timer = setInterval(() => {
-                    const state = this.coin && this.coin.state;
-                    if ((state === 'preparing' || state === 'failed' || state === 'received') && this.$root && this.$root.fetchData)
-                        this.$root.fetchData();
-                }, 4000);
-            },
-            beforeDestroy () { clearInterval(this.timer); }
         });
     })();
 </script>

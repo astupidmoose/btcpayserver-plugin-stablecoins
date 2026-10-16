@@ -70,43 +70,6 @@
                 <div class="form-text">0 charges the customer nothing extra. Above 0, it is added to the swap and paid to your LI.FI fee wallets.</div>
             </div>
 
-            <h4 class="mt-5 mb-2">Native coins, through THORChain</h4>
-            <p class="text-secondary">
-                The checkout looks like a normal BTCPay invoice in that coin: a QR code, an address and an exact amount, with no memo.
-                <a href="https://thorchain.org" target="_blank" rel="noreferrer noopener">THORChain</a> recognises the payment by its exact amount
-                (a memoless deposit) and swaps it to BTC for this invoice. Customers never see THORChain or BTC.
-            </p>
-            <div class="form-group">
-                @for (var i = 0; i < Model.Chains.Count; i++)
-                {
-                    if (Model.Chains[i].Provider != SwapProvider.Thorchain) continue;
-                    <partial name="/Views/Stablecoins/_SwapChainToggle.cshtml" model="(Model, i)" />
-                }
-            </div>
-            <div class="form-group">
-                <label asp-for="ThornodeUrl" class="form-label"></label>
-                <input asp-for="ThornodeUrl" class="form-control font-monospace" autocomplete="off" spellcheck="false" placeholder="@BTCPayServer.Plugins.Stablecoins.Thorchain.ThornodeClient.DefaultUrl" />
-                <span asp-validation-for="ThornodeUrl" class="text-danger"></span>
-                <div class="form-text">Where BTCPay asks THORChain for quotes. Leave empty for the public gateway.</div>
-            </div>
-            <div class="form-group">
-                <label asp-for="ThorToleranceBps" class="form-label"></label>
-                <input asp-for="ThorToleranceBps" type="number" min="10" max="5000" step="1" class="form-control" />
-                <span asp-validation-for="ThorToleranceBps" class="text-danger"></span>
-                <div class="form-text">If the price moves more than this before the swap runs, THORChain refunds the customer instead. 300 = 3%.</div>
-            </div>
-            <div class="form-group">
-                <label asp-for="ThorAffiliate" class="form-label"></label>
-                <input asp-for="ThorAffiliate" class="form-control" autocomplete="off" spellcheck="false" maxlength="30" />
-                <span asp-validation-for="ThorAffiliate" class="text-danger"></span>
-            </div>
-            <div class="form-group">
-                <label asp-for="ThorAffiliateBps" class="form-label"></label>
-                <input asp-for="ThorAffiliateBps" type="number" min="0" max="1000" step="1" class="form-control" />
-                <span asp-validation-for="ThorAffiliateBps" class="text-danger"></span>
-                <div class="form-text">0 charges the customer nothing extra.</div>
-            </div>
-
             <h4 class="mt-5 mb-2">USDC and USDT from any wallet or exchange, through NEAR Intents</h4>
             <p class="text-secondary">
                 Not a payment method of its own, so WooCommerce does not list it: the token checkouts above (Ethereum, Base...)
@@ -155,9 +118,8 @@
                 <div class="form-text">The amount shown includes this margin so BTC price moves don't fail the swap. Whatever it doesn't use comes back to your refund address. 50 = 0.5%.</div>
             </div>
             <input type="hidden" asp-for="IntentsUrl" />
-            <input type="hidden" asp-for="ThorMemolessUrl" />
 
-            <h4 class="mt-5 mb-2">All of them</h4>
+            <h4 class="mt-5 mb-2">Both</h4>
             <div class="form-group">
                 <label asp-for="BufferPercent" class="form-label"></label>
                 <input asp-for="BufferPercent" type="number" min="0" max="5" step="0.1" class="form-control" />

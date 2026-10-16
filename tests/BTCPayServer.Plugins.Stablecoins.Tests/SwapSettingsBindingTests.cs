@@ -42,8 +42,6 @@ public class SwapSettingsBindingTests
             ["Integrator"] = "coincards",
             ["FeePercent"] = "0",
             ["BufferPercent"] = "1",
-            ["ThorToleranceBps"] = "300",
-            ["ThorAffiliateBps"] = "0",
             ["Chains[0].Code"] = "ETHEREUM",
             ["Chains[0].Enabled"] = new StringValues(["true", "false"]),
             ["Chains[1].Code"] = "BASE",

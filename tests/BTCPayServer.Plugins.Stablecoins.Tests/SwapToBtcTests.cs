@@ -19,7 +19,6 @@ public class SwapToBtcTests
         // The WooCommerce plugin sends the id back with every '-' turned into '_', so the ids must not contain '-'.
         Assert.All(ids, id => Assert.Matches(new Regex("^[A-Z0-9_]+$"), id));
         Assert.Equal("LIFI_ETHEREUM", SwapSourceChain.Find("ethereum")!.PaymentMethodId.ToString());
-        Assert.Equal("THOR_LITECOIN", SwapSourceChain.Find("litecoin")!.PaymentMethodId.ToString());
         // What BTCPay's Greenfield API does with the id WooCommerce sends.
         Assert.All(SwapSourceChain.PaymentMethods, c =>
         {
@@ -31,38 +30,20 @@ public class SwapToBtcTests
     }
 
     [Fact]
+    public void OnlyTokenChainsAreOffered()
+    {
+        Assert.All(SwapSourceChain.PaymentMethods, c => Assert.Equal(SwapProvider.Lifi, c.Provider));
+        Assert.Equal(SwapSourceChain.All.Length, SwapSourceChain.All.Select(c => c.Code).Distinct().Count());
+        Assert.Equal(SwapSourceChain.All.Length, SwapSourceChain.All.Select(c => c.Name).Distinct().Count());
+    }
+
+    [Fact]
     public void UsesLifiChainIds()
     {
         Assert.Equal(1, SwapSourceChain.Find("ETHEREUM")!.LifiChainId);
         Assert.Equal(8453, SwapSourceChain.Find("BASE")!.LifiChainId);
         Assert.Equal(1151111081099710, SwapSourceChain.Find("SOLANA")!.LifiChainId);
         Assert.Equal(728126428, SwapSourceChain.Find("TRON")!.LifiChainId);
-    }
-
-    [Fact]
-    public void ThorchainCoversNativeCoinsButNotBitcoinCash()
-    {
-        var thor = SwapSourceChain.All.Where(c => c.Provider == SwapProvider.Thorchain).ToList();
-        Assert.Equal(["LTC.LTC", "DOGE.DOGE", "ZEC.ZEC", "GAIA.ATOM", "XRP.XRP", "ETH.ETH", "BASE.ETH", "BSC.BNB", "AVAX.AVAX", "SOL.SOL", "TRON.TRX"],
-            thor.Select(c => c.ThorAsset));
-        Assert.Equal(SwapSourceChain.All.Length, SwapSourceChain.All.Select(c => c.Code).Distinct().Count());
-        Assert.Equal(SwapSourceChain.All.Length, SwapSourceChain.All.Select(c => c.Name).Distinct().Count());
-        Assert.Equal("THOR_ETH", SwapSourceChain.Find("ETH")!.PaymentMethodId.ToString());
-        Assert.DoesNotContain(SwapSourceChain.All, c => c.ThorAsset?.StartsWith("BCH.") is true || c.Code.Contains("BCH"));
-        Assert.All(thor, c => Assert.False(string.IsNullOrEmpty(c.Ticker)));
-        Assert.Equal("GAIA", SwapSourceChain.Find("COSMOS")!.ThorChain);
-    }
-
-    [Theory]
-    [InlineData("ETH", "0.01230042", "ethereum:0xvault@1?value=12300420000000000")]
-    [InlineData("BASEETH", "0.5", "ethereum:0xvault@8453?value=500000000000000000")]
-    [InlineData("SOL", "1.20000042", "solana:0xvault?amount=1.20000042")]
-    [InlineData("LITECOIN", "1.5", "litecoin:0xvault?amount=1.5")]
-    [InlineData("TRX", "100.000042", null)]
-    public void CoinPaymentLinksMatchWhatWalletsScan(string code, string amount, string? expected)
-    {
-        var a = decimal.Parse(amount, System.Globalization.CultureInfo.InvariantCulture);
-        Assert.Equal(expected, SwapSourceChain.Find(code)!.PaymentUri("0xvault", a, amount));
     }
 
     [Theory]
@@ -97,37 +78,6 @@ public class SwapToBtcTests
     }
 
     [Theory]
-    [InlineData(null, null, 0, 300, true)]
-    [InlineData("https://thornode.example.com", "coincards", 0, 300, true)]
-    [InlineData("http://thornode.example.com", null, 0, 300, false)]
-    [InlineData(null, "has space", 0, 300, false)]
-    [InlineData(null, "coincards", 1001, 300, false)]
-    [InlineData(null, null, 0, 5, false)]
-    public void ValidatesThorchainSettings(string? url, string? affiliate, int bps, int tolerance, bool valid)
-    {
-        var config = new SwapToBtcPaymentMethodConfig
-        {
-            Integrator = "coincards", ThornodeUrl = url, ThorAffiliate = affiliate, ThorAffiliateBps = bps, ThorToleranceBps = tolerance
-        };
-        Assert.Equal(valid, !SwapToBtcPaymentMethodHandler.Validate(config).Any());
-    }
-
-    [Fact]
-    public void ReadsThorchainOutboundMemo()
-    {
-        var inbound = "A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8F90";
-        var tx = Network.Main.CreateTransaction();
-        tx.Outputs.Add(Money.Coins(0.01m), new Key().GetScriptPubKey(ScriptPubKeyType.Segwit));
-        tx.Outputs.Add(Money.Zero, TxNullDataTemplate.Instance.GenerateScriptPubKey(System.Text.Encoding.ASCII.GetBytes($"OUT:{inbound}")));
-        Assert.Equal(inbound, SwapToBtcListener.ThorOutboundTxId(tx));
-
-        var plain = Network.Main.CreateTransaction();
-        plain.Outputs.Add(Money.Coins(0.01m), new Key().GetScriptPubKey(ScriptPubKeyType.Segwit));
-        Assert.Null(SwapToBtcListener.ThorOutboundTxId(plain));
-        Assert.Null(SwapToBtcListener.ThorOutboundTxId(null));
-    }
-
-    [Theory]
     [InlineData("0x5f2a3c0d8a4b1e6f7c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d", true)]
     [InlineData("5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW", true)]
     [InlineData("short", false)]
@@ -142,7 +92,6 @@ public class SwapToBtcTests
     public void LinksToTheRightExplorer()
     {
         Assert.StartsWith("https://scan.li.fi/tx/", UISwapCheckoutController.ExplorerLink(SwapSourceChain.Find("BASE")!, "0xabc"));
-        Assert.StartsWith("https://runescan.io/tx/", UISwapCheckoutController.ExplorerLink(SwapSourceChain.Find("LITECOIN")!, "abc"));
     }
 
     [Fact]

@@ -25,18 +25,6 @@ function btcpay_stablecoins_gateway_titles(): array {
 		'LIFI_AVALANCHE' => 'Avalanche Network',
 		'LIFI_SOLANA'    => 'Solana',
 		'LIFI_TRON'      => 'Tron',
-		// Coins, paid like a Litecoin invoice.
-		'THOR_LITECOIN'  => 'Litecoin',
-		'THOR_DOGECOIN'  => 'Dogecoin',
-		'THOR_ZCASH'     => 'Zcash',
-		'THOR_COSMOS'    => 'Cosmos (ATOM)',
-		'THOR_XRP'       => 'XRP',
-		'THOR_ETH'       => 'Ether (ETH)',
-		'THOR_BASEETH'   => 'ETH on Base',
-		'THOR_BNB'       => 'BNB',
-		'THOR_AVAX'      => 'Avalanche (AVAX)',
-		'THOR_SOL'       => 'Solana (SOL)',
-		'THOR_TRX'       => 'Tron (TRX)',
 	];
 }
 
