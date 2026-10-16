@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <Product>Stablecoins</Product>
-    <Description>Let customers pay BTC invoices from Ethereum, Base, Solana, Tron, Litecoin, Dogecoin, Zcash and more. Tokens are swapped through LI.FI and native coins through THORChain, straight to the store's own BTC wallet.</Description>
+    <Description>Let customers pay BTC invoices with tokens on Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Solana and Tron, from a wallet (LI.FI) or as USDC and USDT from an exchange (NEAR Intents), straight to the store's own BTC wallet.</Description>
     <Version>0.8.0</Version>
   </PropertyGroup>
 
