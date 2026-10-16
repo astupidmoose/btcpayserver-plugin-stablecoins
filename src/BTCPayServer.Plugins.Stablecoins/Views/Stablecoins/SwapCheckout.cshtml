@@ -111,6 +111,20 @@
         {
             @:document.querySelectorAll('.payment-methods-wrapper .btcpay-pills > a:not([v-for])').forEach(e => e.remove());
         }
+        // BTCPay 2.4.5's checkout shows "Tax included" in View Details, but its translations lack the key,
+        // so it shows as "tax_included". Fill it in (in any language that lacks it) until BTCPay ships it.
+        if (window.i18next) {
+            const missing = { tax_included: 'Tax included' };
+            const fill = () => {
+                const lng = i18next.language;
+                if (!lng) return;
+                for (const [key, text] of Object.entries(missing))
+                    if (!i18next.exists(key)) i18next.addResource(lng, 'translation', key, text);
+            };
+            i18next.on('loaded', fill);
+            i18next.on('languageChanged', fill);
+            fill();
+        }
         const scriptUrls = @Safe.Json(scriptUrls);
         const loading = {};
         // Each wallet family (EVM, Solana, Tron) is its own bundle; load only the one this chain needs.
