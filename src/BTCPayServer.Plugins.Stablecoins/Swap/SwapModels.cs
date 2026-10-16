@@ -53,6 +53,13 @@ public class SwapToBtcPaymentMethodConfig
         SwapSourceChain.ExchangeOptions.Where(c => ExchangeOptions.Contains(c.Code, StringComparer.OrdinalIgnoreCase) &&
                                                    Intents.IntentsDepositService.Networks(c, this).Any());
 
+    /// <summary>
+    /// The exchange options a token checkout offers: only the coins NEAR Intents takes on that same chain, with a refund
+    /// address there. The customer sends on the chain of the checkout they are on, never another one.
+    /// </summary>
+    public IEnumerable<SwapSourceChain> ExchangeOptionsFor(SwapSourceChain chain) =>
+        EnabledExchangeOptions().Where(o => Intents.IntentsDepositService.Networks(o, this).Any(n => n.Code == chain.IntentsNetworkCode));
+
     public string? RefundAddress(AddressFamily family) => family switch
     {
         AddressFamily.Evm => RefundEvm,

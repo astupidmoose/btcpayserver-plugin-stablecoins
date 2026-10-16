@@ -65,7 +65,7 @@
 
 <template id="stablecoins-network-picker">
     <div class="stablecoins-network mb-3" v-if="d.state !== 'done'">
-        <div class="form-group mb-3" v-if="d.state !== 'received'">
+        <div class="form-group mb-3" v-if="!d.fixed && d.state !== 'received'">
             <label class="form-label" for="StablecoinsNetwork">Network</label>
             <select id="StablecoinsNetwork" class="form-select" :value="d.network || ''" :disabled="busy || d.state === 'incomplete'" v-on:change="choose($event.target.value)">
                 <option value="" disabled>Choose the network you send from</option>

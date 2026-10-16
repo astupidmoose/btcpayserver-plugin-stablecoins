@@ -37,6 +37,8 @@ public record SwapSourceChain
     public required SwapProvider Provider { get; init; }
     /// <summary>LI.FI chain id (LI.FI only).</summary>
     public long LifiChainId { get; init; }
+    /// <summary>The same chain's NEAR Intents code (base, sol...), for "Send USDC from an exchange" on this checkout (LI.FI only).</summary>
+    public string? IntentsNetworkCode { get; init; }
     /// <summary>THORChain asset, for example LTC.LTC (THORChain only).</summary>
     public string? ThorAsset { get; init; }
     /// <summary>The coin's ticker, shown with the amount to send (THORChain only).</summary>
@@ -77,8 +79,8 @@ public record SwapSourceChain
         return UriScheme is { } scheme ? $"{scheme}:{address}?amount={formattedAmount}" : null;
     }
 
-    static SwapSourceChain Lifi(string code, string name, long chainId) =>
-        new() { Code = code, Name = name, Provider = SwapProvider.Lifi, LifiChainId = chainId };
+    static SwapSourceChain Lifi(string code, string name, long chainId, string intentsNetwork) =>
+        new() { Code = code, Name = name, Provider = SwapProvider.Lifi, LifiChainId = chainId, IntentsNetworkCode = intentsNetwork };
 
     static SwapSourceChain Thor(string code, string name, string asset, string ticker, int decimals, string? uriScheme, string? image = null, long? evmChainId = null) =>
         new() { Code = code, Name = name, Provider = SwapProvider.Thorchain, ThorAsset = asset, Ticker = ticker, Decimals = decimals, UriScheme = uriScheme, CoinImage = image, EvmChainId = evmChainId };
@@ -101,15 +103,15 @@ public record SwapSourceChain
 
     public static readonly SwapSourceChain[] All =
     [
-        Lifi("ETHEREUM", "Ethereum", 1),
-        Lifi("BASE", "Base", 8453),
-        Lifi("ARBITRUM", "Arbitrum", 42161),
-        Lifi("OPTIMISM", "Optimism", 10),
-        Lifi("POLYGON", "Polygon", 137),
-        Lifi("BSC", "BNB Chain", 56),
-        Lifi("AVALANCHE", "Avalanche", 43114),
-        Lifi("SOLANA", "Solana", SolanaLifiChainId),
-        Lifi("TRON", "Tron", TronLifiChainId),
+        Lifi("ETHEREUM", "Ethereum", 1, "eth"),
+        Lifi("BASE", "Base", 8453, "base"),
+        Lifi("ARBITRUM", "Arbitrum", 42161, "arb"),
+        Lifi("OPTIMISM", "Optimism", 10, "op"),
+        Lifi("POLYGON", "Polygon", 137, "pol"),
+        Lifi("BSC", "BNB Chain", 56, "bsc"),
+        Lifi("AVALANCHE", "Avalanche", 43114, "avax"),
+        Lifi("SOLANA", "Solana", SolanaLifiChainId, "sol"),
+        Lifi("TRON", "Tron", TronLifiChainId, "tron"),
         // THORChain coins with memoless deposits. BCH is left out on purpose. Monero is not offered by THORChain's memoless API yet.
         Thor("LITECOIN", "Litecoin", "LTC.LTC", "LTC", 8, "litecoin", "imlegacy/litecoin.svg"),
         Thor("DOGECOIN", "Dogecoin", "DOGE.DOGE", "DOGE", 8, "dogecoin", "imlegacy/dogecoin.png"),

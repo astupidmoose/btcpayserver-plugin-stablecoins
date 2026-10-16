@@ -158,6 +158,13 @@ public class SwapToBtcTests
         Assert.Equal(new[] { "USDT" }, config.EnabledExchangeOptions().Select(c => c.Code));
         config.RefundEvm = "0x" + new string('a', 40);
         Assert.Equal(new[] { "USDC", "USDT" }, config.EnabledExchangeOptions().Select(c => c.Code));
+        // Each token checkout offers only what NEAR Intents takes on that same chain.
+        Assert.Equal(new[] { "USDC" }, config.ExchangeOptionsFor(SwapSourceChain.Find("BASE")!).Select(c => c.Code));
+        Assert.Equal(new[] { "USDC", "USDT" }, config.ExchangeOptionsFor(SwapSourceChain.Find("ETHEREUM")!).Select(c => c.Code));
+        Assert.Equal(new[] { "USDT" }, config.ExchangeOptionsFor(SwapSourceChain.Find("TRON")!).Select(c => c.Code));
+        Assert.Empty(config.ExchangeOptionsFor(SwapSourceChain.Find("SOLANA")!)); // no Solana refund address
+        Assert.All(SwapSourceChain.PaymentMethods.Where(c => c.Provider == SwapProvider.Lifi), c =>
+            Assert.Contains(SwapSourceChain.ExchangeOptions.SelectMany(o => o.Networks), n => n.Code == c.IntentsNetworkCode));
         config.ExchangeOptions = [];
         Assert.Empty(config.EnabledExchangeOptions());
     }
