@@ -240,7 +240,9 @@ public class ThorDepositService(ThorQuoteService quotes, MemolessClient memoless
     static string Friendly(Exception ex) => ex switch
     {
         MemolessException { Code: "RATE_LIMITED" } => "Payments in this coin are busy right now. Please try again in a few minutes.",
-        ThornodeException t when t.Message.Contains("paused", StringComparison.OrdinalIgnoreCase) => "Payments in this coin are paused right now. Please choose another way to pay.",
+        // THORChain pauses a coin's swaps, or all memoless deposits ("memoless transactions are currently halted").
+        ThornodeException t when t.Message.Contains("paused", StringComparison.OrdinalIgnoreCase) ||
+                                 t.Message.Contains("halted", StringComparison.OrdinalIgnoreCase) => "Payments in this coin are paused right now. Please choose another way to pay.",
         _ => "This payment option is unavailable right now. Please try again shortly or choose another way to pay."
     };
 

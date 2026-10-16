@@ -17,7 +17,7 @@ import {
   getTokenBalances,
   getTokens,
 } from '@lifi/sdk';
-import { useSDKProviders } from '@lifi/widget-provider';
+import { useEthereumContext, useSDKProviders, useTronContext } from '@lifi/widget-provider';
 import { useAccount, useWalletMenu, WalletManagementProviders } from '@lifi/wallet-management';
 
 export const BTC_CHAIN_ID = 20000000000001;
@@ -31,6 +31,26 @@ export const TRON_CHAIN_ID = 728126428;
 const MIN_ACCEPTED_OUTPUT = 0.99;
 const QUOTE_REFRESH_MS = 45_000;
 const MIN_BALANCE_USD = 0.5;
+
+const WALLETCONNECT_ICON = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#3B99FC"/>' +
+  '<path d="M12.3 15.4c4.3-4.2 11.2-4.2 15.4 0l.5.5c.2.2.2.6 0 .8l-1.8 1.7c-.1.1-.3.1-.4 0l-.7-.7c-3-2.9-7.8-2.9-10.8 0l-.8.7c-.1.1-.3.1-.4 0l-1.8-1.7c-.2-.2-.2-.6 0-.8l.8-.5zm19.1 3.5 1.6 1.6c.2.2.2.6 0 .8l-7.2 7c-.2.2-.6.2-.8 0l-5.1-5c-.1-.1-.2-.1-.2 0l-5.1 5c-.2.2-.6.2-.8 0l-7.2-7c-.2-.2-.2-.6 0-.8l1.6-1.6c.2-.2.6-.2.8 0l5.1 5c.1.1.2.1.2 0l5.1-5c.2-.2.6-.2.8 0l5.1 5c.1.1.2.1.2 0l5.1-5c.2-.2.6-.2.8 0z" fill="#fff"/></svg>');
+
+/**
+ * Connects a phone wallet by QR code (WalletConnect) straight from the checkout, without the wallet list.
+ * Solana has no WalletConnect connector in LI.FI's providers, so it has none.
+ */
+function useQrConnect(chain) {
+  const ethereum = useEthereumContext();
+  const tron = useTronContext();
+  if (chain.id === SOLANA_CHAIN_ID) return null;
+  if (chain.id === TRON_CHAIN_ID) return () => tron.connect('WalletConnect');
+  return () => {
+    // WalletConnect's QR dialog renders into this element; LI.FI's wallet menu normally adds it.
+    if (!document.querySelector('w3m-modal')) document.body.appendChild(document.createElement('w3m-modal'));
+    return ethereum.connect('walletConnect');
+  };
+}
 
 /** BTC (decimal string) to satoshis (string). */
 export function toSats(btc) {
@@ -80,6 +100,8 @@ function Panel({ opts, client, chain }) {
   useEffect(() => { client.setProviders(sdkProviders); }, [client, sdkProviders]);
   const { account } = useAccount({ chainType: chain.chainType });
   const { openWalletMenu } = useWalletMenu();
+  const qrConnect = useQrConnect(chain);
+  const [qrError, setQrError] = useState(null);
   const address = account?.isConnected ? account.address : null;
 
   const [balances, setBalances] = useState(null);
@@ -185,9 +207,25 @@ function Panel({ opts, client, chain }) {
 
   if (!address) {
     return (
-      <button type="button" className="btn btn-primary w-100" onClick={() => openWalletMenu()}>
-        Connect wallet
-      </button>
+      <div className="d-grid gap-2">
+        <button type="button" className="btn btn-primary w-100" onClick={() => openWalletMenu()}>
+          Connect wallet
+        </button>
+        {qrConnect && (
+          <button
+            type="button"
+            className="btn btn-outline-primary w-100 d-flex align-items-center justify-content-center gap-2"
+            onClick={async () => {
+              setQrError(null);
+              try { await qrConnect(); } catch (e) { setQrError(errorText(e)); }
+            }}
+          >
+            <img src={WALLETCONNECT_ICON} alt="" width="20" height="20" />
+            Scan QR code
+          </button>
+        )}
+        {qrError && <div className="text-danger small text-center">{qrError}</div>}
+      </div>
     );
   }
 

@@ -44,6 +44,8 @@ public class MemolessClient(HttpClient http)
         return json["data"]?.ToObject<MemolessPreflight>() ?? throw new ThornodeException("Empty preflight");
     }
 
+    static string Truncate(string text, int max) => text.Length <= max ? text : text[..max] + "…";
+
     public static string Format(decimal amount, int decimals) =>
         decimal.Round(amount, Math.Min(decimals, 8), MidpointRounding.ToPositiveInfinity).ToString("0." + new string('0', Math.Min(decimals, 8)), CultureInfo.InvariantCulture);
 
@@ -70,7 +72,8 @@ public class MemolessClient(HttpClient http)
             var error = json["error"];
             var code = error?["code"]?.ToString();
             var message = error?["message"]?.ToString() ?? error?.ToString() ?? $"HTTP {(int)res.StatusCode}";
-            throw new MemolessException(code, message);
+            // The short message rarely says why; keep the whole answer for the log.
+            throw new MemolessException(code, $"{message} (HTTP {(int)res.StatusCode}: {Truncate(text, 600)})");
         }
         return json;
     }

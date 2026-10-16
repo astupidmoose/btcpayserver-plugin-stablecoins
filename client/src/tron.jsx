@@ -1,4 +1,5 @@
 import { TronProvider } from '@lifi/widget-provider-tron';
 import { register } from './core.jsx';
 
-register('tron', () => [TronProvider()]);
+// WalletConnect lets phone wallets (TronLink, Trust...) connect by QR code.
+register('tron', () => [TronProvider({ walletConnect: true })]);
