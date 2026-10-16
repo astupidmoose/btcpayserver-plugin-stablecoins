@@ -1,4 +1,4 @@
-# Stablecoins for BTCPay Server
+# Cross-Chain Payments for BTCPay Server
 
 A BTCPay Server plugin that lets customers pay a normal BTC invoice from other chains.
 
@@ -20,7 +20,7 @@ Each source chain is its own BTCPay payment method, so the WooCommerce BTCPay pl
 | NEAR Intents deposits: quote, follow the deposit | `Intents/` |
 | Checkout endpoints: exchange option, customer transaction reporting | `Controllers/UISwapCheckoutController.cs` |
 | Wallet payment panel (LI.FI SDK), one bundle per wallet family (EVM, Solana, Tron) | `client/` → `Resources/js/swappanel-*.js` |
-| Store settings page (Wallets → Pay from other chains) | `Controllers/UISwapStoreController.cs`, `Views/Stablecoins/SwapSettings.cshtml` |
+| Store settings page (Wallets → Other Chains), with an on/off switch for the whole feature | `Controllers/UISwapStoreController.cs`, `Views/Stablecoins/SwapSettings.cshtml` |
 | Swap payments on the invoice page | `Views/Stablecoins/ViewSwapToBtcPaymentData.cshtml` |
 
 Payment method ids use underscores, not dashes: the WooCommerce plugin sends the id back with every `-` turned into `_`, and BTCPay only maps that back for its built-in coins.
@@ -50,6 +50,7 @@ The wallet address, transaction hashes, deposit address and quote id are also ad
 
 ## Settings (per store)
 
+- An Enable switch for the whole feature. Off removes every chain from checkout and WooCommerce but keeps your choices.
 - Which chains are enabled, and USDC/USDT from an exchange.
 - LI.FI: integrator name (from [portal.li.fi](https://portal.li.fi)), optional API key, integrator fee (default 0).
 - WalletConnect project ID (optional): lets customers connect a mobile EVM wallet by scanning a QR code; browser wallets work without it. To get one, sign up free at [Reown](https://cloud.reown.com) (formerly WalletConnect Cloud), create a project, copy its Project ID into this field, and add your BTCPay domain (for example `btcpay.example.com`) to the project's allowed domains.

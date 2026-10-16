@@ -40,11 +40,15 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             .ToList();
         var any = await storeRepository.GetSettingAsync<SwapToBtcPaymentMethodConfig>(store.Id, StoreSettingName) ??
                   configs.Select(c => c.Config).FirstOrDefault(c => c is not null) ?? new SwapToBtcPaymentMethodConfig();
-        var chains = configs.Select(c => (c.Chain, Enabled: c.Config is not null && !excluded.Match(c.Chain.PaymentMethodId)))
+        // While the feature is off the chains have no payment method, so their toggles come from the remembered choice.
+        var chains = configs.Select(c => (c.Chain, Enabled: any.Disabled
+                ? any.Chains.Contains(c.Chain.Code, System.StringComparer.OrdinalIgnoreCase)
+                : c.Config is not null && !excluded.Match(c.Chain.PaymentMethodId)))
             .Concat(SwapSourceChain.ExchangeOptions.Select(c => (Chain: c, Enabled: any.ExchangeOptions.Contains(c.Code))));
         return View(SettingsView, new SwapSettingsViewModel
         {
             HasBtcWallet = store.GetDerivationSchemeSettings(handlers, "BTC") is not null,
+            Enabled = !any.Disabled,
             Integrator = any.Integrator ?? SwapDefaults.Integrator,
             ApiKey = any.ApiKey,
             FeePercent = any.Fee * 100m,
@@ -99,12 +103,14 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         var enabled = vm.Chains.Where(c => c.Enabled).Select(c => SwapSourceChain.Find(c.Code)).OfType<SwapSourceChain>().ToHashSet();
         var exchange = enabled.Where(c => c.Provider == SwapProvider.Intents).ToList();
         config.ExchangeOptions = exchange.Select(c => c.Code).ToArray();
+        config.Chains = enabled.Where(c => c.Provider == SwapProvider.Lifi).Select(c => c.Code).ToArray();
+        config.Disabled = !vm.Enabled;
         foreach (var chain in exchange)
             if (!Intents.IntentsDepositService.Networks(chain, config).Any())
                 ModelState.AddModelError(nameof(vm.RefundEvm), $"Add at least one refund address to offer {chain.Name}: NEAR Intents returns payments it cannot swap there.");
         if (exchange.Count > 0 && !enabled.Any(c => c.Provider == SwapProvider.Lifi))
             ModelState.AddModelError(string.Empty, "USDC and USDT from an exchange are offered on the token checkouts: turn on at least one token chain (Ethereum, Base...).");
-        if (enabled.Count > 0 && !vm.HasBtcWallet)
+        if (vm.Enabled && enabled.Count > 0 && !vm.HasBtcWallet)
             ModelState.AddModelError(string.Empty, "Set up the store's BTC on-chain wallet first: swapped BTC is paid into it.");
         if (!ModelState.IsValid)
         {
@@ -123,7 +129,7 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         foreach (var chain in SwapSourceChain.PaymentMethods)
         {
             var handler = handlers[chain.PaymentMethodId];
-            var on = enabled.Contains(chain);
+            var on = vm.Enabled && enabled.Contains(chain);
             // Disabled chains are removed, not just excluded, so WooCommerce stops listing them.
             store.SetPaymentMethodConfig(handler, on ? config : null);
             blob.SetExcluded(chain.PaymentMethodId, !on);
@@ -136,7 +142,9 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         TempData.SetStatusMessageModel(new StatusMessageModel
         {
             Severity = StatusMessageModel.StatusSeverity.Success,
-            Message = enabled.Count == 0
+            Message = !vm.Enabled
+                ? "Swap settings saved. Paying from other chains is turned off."
+                : enabled.Count == 0
                 ? "Swap settings saved. No chains are enabled."
                 : $"Swap settings saved. Customers can pay from {string.Join(", ", SwapSourceChain.All.Where(enabled.Contains).Select(c => c.Name))}."
         });
@@ -169,6 +177,9 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
 public class SwapSettingsViewModel
 {
     public bool HasBtcWallet { get; set; }
+
+    [Display(Name = "Enable")]
+    public bool Enabled { get; set; } = true;
 
     [Display(Name = "LI.FI integrator name")]
     public string? Integrator { get; set; }

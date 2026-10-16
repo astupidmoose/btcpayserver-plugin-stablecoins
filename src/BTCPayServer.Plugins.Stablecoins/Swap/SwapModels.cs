@@ -37,6 +37,10 @@ public class SwapToBtcPaymentMethodConfig
     public int IntentsSlippageBps { get; set; } = SwapDefaults.IntentsSlippageBps;
     /// <summary>The exchange options switched on (USDC, USDT), offered on the token checkouts. Not payment methods.</summary>
     public string[] ExchangeOptions { get; set; } = [];
+    /// <summary>The store turned the whole feature off: no chain is offered, but the choices below are kept.</summary>
+    public bool Disabled { get; set; }
+    /// <summary>The token chains (codes) the store picked, remembered while the feature is off.</summary>
+    public string[] Chains { get; set; } = [];
 
     public IEnumerable<SwapSourceChain> EnabledExchangeOptions() =>
         SwapSourceChain.ExchangeOptions.Where(c => ExchangeOptions.Contains(c.Code, StringComparer.OrdinalIgnoreCase) &&

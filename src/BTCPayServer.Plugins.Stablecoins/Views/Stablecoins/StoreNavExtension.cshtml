@@ -1,12 +1,19 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Plugins.Stablecoins.Controllers
+@using BTCPayServer.Plugins.Stablecoins.Swap
 @using BTCPayServer.Client
+@using BTCPayServer.Data
 @inject IScopeProvider ScopeProvider
 @{
     var storeId = ScopeProvider.GetCurrentStoreId();
     ViewContext.RouteData.Values.TryGetValue("Controller", out var controller);
     var isActive = !string.IsNullOrEmpty(storeId) && controller?.ToString() is { Length: > 0 } name &&
                    nameof(UISwapStoreController).StartsWith(name, StringComparison.InvariantCultureIgnoreCase);
+    // Green when at least one chain is offered, like BTCPay's own wallets.
+    var store = Context.GetStoreData();
+    var excluded = store?.GetStoreBlob().GetExcludedPaymentMethods();
+    var on = store is not null && SwapSourceChain.PaymentMethods.Any(c =>
+        store.GetPaymentMethodConfig(c.PaymentMethodId) is not null && !excluded!.Match(c.PaymentMethodId));
 }
 @if (!string.IsNullOrEmpty(storeId))
 {
@@ -16,8 +23,8 @@
            asp-controller="UISwapStore"
            asp-action="SwapSettings"
            asp-route-storeId="@storeId">
-            <img src="~/Resources/chains/ethereum.svg" alt="" width="18" height="18" class="me-2" />
-            <span>Pay from other chains</span>
+            <span class="me-2 btcpay-status btcpay-status--@(on ? "enabled" : "pending")"></span>
+            <span>Other Chains</span>
         </a>
     </li>
 }

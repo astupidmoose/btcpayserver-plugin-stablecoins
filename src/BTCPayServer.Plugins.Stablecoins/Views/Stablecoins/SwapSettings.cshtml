@@ -3,7 +3,7 @@
 @using BTCPayServer.Plugins.Stablecoins.Swap
 @model SwapSettingsViewModel
 @{
-    ViewData.SetLayoutModel(new LayoutModel("STABLECOINS-SWAP", "Pay from other chains"));
+    ViewData.SetLayoutModel(new LayoutModel("STABLECOINS-SWAP", "Other Chains"));
     Layout = "_Layout";
     var storeId = Context.GetRouteValue("storeId");
 }
@@ -35,6 +35,13 @@
         }
         @* novalidate: the server checks every field and says what is wrong; the browser's own checks can block Save without a visible reason. *@
         <form method="post" asp-action="SwapSettings" asp-route-storeId="@storeId" novalidate>
+            <div class="d-flex align-items-center mt-2 mb-4">
+                <input asp-for="Enabled" type="checkbox" class="btcpay-toggle me-3" />
+                <div>
+                    <label asp-for="Enabled" class="form-check-label"></label>
+                    <div class="form-text mt-0">When off, no chain below is offered at checkout or in WooCommerce. Your choices and settings are kept.</div>
+                </div>
+            </div>
             <h4 class="mt-4 mb-2">Tokens, through LI.FI</h4>
             <p class="text-secondary">
                 The customer connects their wallet and pays with any token on the chain; <a href="https://li.fi" target="_blank" rel="noreferrer noopener">LI.FI</a>
