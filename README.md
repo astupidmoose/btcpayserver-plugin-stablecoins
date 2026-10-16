@@ -2,7 +2,10 @@
 
 A BTCPay Server plugin that adds stablecoins as native payment methods, paid straight into a wallet the merchant controls. It starts with USDC.
 
-This is **Phase 1: direct USDC on Solana**. Customers pay USDC from any Solana Pay wallet (Phantom, Solflare, Backpack and others), BTCPay matches the payment to the invoice through a Solana Pay reference key, and the rest (invoice states, webhooks, the WooCommerce connector) is BTCPay's own.
+It has two parts:
+
+- **Pay from other chains (LI.FI → BTC).** One payment method per chain (Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Solana). The invoice is a normal BTC invoice paying a fresh address from the store's own BTC wallet; the customer pays with any token on the chosen chain through the [LI.FI](https://li.fi) widget, and a bridge delivers native BTC to that address. See [Pay from other chains](#pay-from-other-chains-lifi--btc).
+- **Direct USDC on Solana (Phase 1).** Customers pay USDC from any Solana Pay wallet (Phantom, Solflare, Backpack and others), BTCPay matches the payment to the invoice through a Solana Pay reference key, and the rest (invoice states, webhooks, the WooCommerce connector) is BTCPay's own.
 
 ## What it adds
 
@@ -26,6 +29,31 @@ This is **Phase 1: direct USDC on Solana**. Customers pay USDC from any Solana P
 6. Payment status follows Solana commitment: `confirmed` is Processing, `finalized` (about 13 seconds later) is Settled. A store on the **high speed** policy settles at `confirmed`.
 
 BTCPay then computes the invoice state from the payments exactly as it does for Bitcoin: paid, partially paid (the QR updates to the remaining amount, same reference), overpaid, expired, and paid late. The WooCommerce connector sees the usual BTCPay webhooks.
+
+## Pay from other chains (LI.FI → BTC)
+
+| Piece | Where |
+|---|---|
+| Chain catalog: payment method ids `LIFI-ETHEREUM`, `LIFI-BASE`, ... and LI.FI chain ids | `Swap/SwapSourceChain.cs` |
+| Payment method: priced in BTC, reserves an address from the store's BTC wallet | `Swap/SwapToBtcPaymentMethodHandler.cs` |
+| Listener: credits BTC delivered to those addresses, tracks confirmations | `Swap/SwapToBtcListener.cs` |
+| Checkout: BTCPay's own checkout with the LI.FI panel in place of the QR | `Swap/SwapToBtcCheckout.cs`, `Views/Stablecoins/SwapCheckout.cshtml` |
+| LI.FI widget bundle (React, EVM and Solana wallets) | `client/` → `Resources/js/swappanel.js` |
+| Store settings page (Wallets → Pay from other chains) | `Controllers/UISwapStoreController.cs`, `Views/Stablecoins/SwapSettings.cshtml` |
+
+How a payment works:
+
+1. WooCommerce (BTCPay plugin with "Separate payment gateways") lists each enabled chain as its own gateway, because it lists one gateway per store payment method. Rename them in WooCommerce, for example `LIFI_ETHEREUM` to "Ethereum".
+2. Picking one creates a BTCPay invoice with only that method. The handler prices it in BTC and reserves the next address from the store's BTC on-chain wallet, like a plain Bitcoin invoice, and labels the address with the invoice in the wallet.
+3. The checkout is BTCPay's own (store header, amount in BTC, timer, View Details). In place of the QR, the LI.FI widget is locked to the chosen source chain, with BTC to the invoice address as the fixed destination and the amount due (plus a small buffer) as an exact-output quote. The customer picks a token, connects their wallet and signs.
+4. LI.FI routes through a bridge that pays native BTC (THORChain, Chainflip, Garden...). BTCPay's NBXplorer connection already watches the store's wallet; the listener picks up the transaction to the invoice's address and records it under the chain's payment method. BTCPay's own Bitcoin listener only credits `BTC-CHAIN` addresses, so the two never double count.
+5. Confirmations follow the store's speed policy exactly as for on-chain BTC. On every block the listener also rescans the wallet's coins, which catches anything that arrived while BTCPay was down.
+
+Settings: LI.FI integrator name (register it at [portal.li.fi](https://portal.li.fi) to collect fees), optional API key, optional integrator fee, the amount buffer (default 0.5%), and an optional WalletConnect project id for mobile EVM wallets.
+
+Things to set on the store: bridging to BTC usually takes several minutes and can take longer, so give invoices a longer expiry (for example 60 minutes) and consider a small payment tolerance.
+
+To rebuild the widget bundle: `cd client && npm ci && npm run build`.
 
 ## Design choices, and why
 
@@ -93,11 +121,16 @@ Upload the resulting `.btcpay` file under Server Settings → Plugins → Upload
 - **USDC rate.** The default treats USDC through BTC prices on Kraken. If the store wants USDC pegged at exactly 1 USD, set `USDC_USD = 1` in the store's rate rules.
 - **Refunds** are Phase 4 (BTCPay pull payments). The payer address is already recorded on each payment for that.
 - **Compliance screening** of the payer is Phase 4.
+- **Pay from other chains is not yet run live.** Built and unit-tested; LI.FI and Solana hosts were not reachable from the build environment. First live test: a small Base or Arbitrum payment on the test store.
+- **A swap that finishes after the invoice expired** is recorded and shows as paid late, like late BTC. Longer expiry avoids this.
+- **The customer can edit the BTC amount in the LI.FI panel.** Anything short leaves the invoice partially paid, and the panel re-quotes the rest.
+- **Chain icons** are simple placeholders.
+- **Zcash and Monero** are not reachable through LI.FI. THORChain routes ZEC directly (and XMR may follow); a direct THORChain route would reuse the payment methods, checkout and listener and only replace the widget.
 
 ## Roadmap
 
 1. **Phase 1 (this):** direct USDC on Solana.
 2. Phase 2: "pay with another token" swap panel on Solana via Jupiter, settling to the same reference-tagged transfer, so the listener should need no change.
-3. Phase 3: `USDC-BASE` payment method, LI.FI routing from other EVM chains.
+3. Phase 3: pay BTC invoices from other chains via LI.FI (this branch). Later: settle into USDC instead of BTC, and direct THORChain routes for ZEC/XMR.
 4. Phase 4: address screening, refunds through pull payments, monitoring.
 5. Phase 5: publish on the Plugin Builder.
