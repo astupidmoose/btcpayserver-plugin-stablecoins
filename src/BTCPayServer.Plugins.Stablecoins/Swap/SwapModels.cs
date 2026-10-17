@@ -13,7 +13,10 @@ public class SwapToBtcPaymentMethodConfig
 {
     /// <summary>LI.FI integrator name from the partner portal. Tags swaps and routes fees.</summary>
     public string? Integrator { get; set; }
-    /// <summary>Optional LI.FI API key. It is sent to the browser, as LI.FI's widget requires.</summary>
+    /// <summary>
+    /// Optional LI.FI API key, sent to the browser as LI.FI requires. Kept only in the store setting (<see cref="SwapSecrets"/>),
+    /// never in the payment method configs that BTCPay's API returns.
+    /// </summary>
     public string? ApiKey { get; set; }
     /// <summary>Optional integrator fee as a fraction, for example 0.005 for 0.5%. Paid by the customer.</summary>
     public decimal Fee { get; set; }
@@ -22,10 +25,8 @@ public class SwapToBtcPaymentMethodConfig
     /// <summary>Optional WalletConnect (Reown) project id, which enables mobile wallets on EVM chains.</summary>
     public string? WalletConnectProjectId { get; set; }
 
-    /// <summary>NEAR Intents 1Click API key (a JWT). Stays on the server.</summary>
+    /// <summary>NEAR Intents 1Click API key (a JWT). Stays on the server, in the store setting only, like <see cref="ApiKey"/>.</summary>
     public string? IntentsApiKey { get; set; }
-    /// <summary>1Click endpoint; not on the settings page, the default is NEAR Intents' own.</summary>
-    public string? IntentsUrl { get; set; }
     /// <summary>
     /// Where NEAR Intents returns a stablecoin payment it could not swap (too little sent, sent too late), and any excess.
     /// One per address family; a network is offered only when its family has one.
@@ -77,6 +78,8 @@ public class SwapToBtcPromptDetails
     public string? KeyPath { get; set; }
     public int KeyIndex { get; set; }
     public long FromChainId { get; set; }
+    /// <summary>Every NEAR Intents deposit quoted for this checkout, followed until settled (also after a restart).</summary>
+    public List<Intents.PersistedQuote>? IntentsQuotes { get; set; }
 }
 
 /// <summary>

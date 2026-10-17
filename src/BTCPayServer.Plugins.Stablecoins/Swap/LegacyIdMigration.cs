@@ -20,6 +20,7 @@ namespace BTCPayServer.Plugins.Stablecoins.Swap;
 /// (NEAR_USDC, NEAR_USDT), so integrations stop listing them: their payment methods are removed, and whether
 /// they were on is kept in the settings.
 /// Version 0.8 drops THORChain (THOR_LITECOIN, THOR_ETH...): those payment methods are removed.
+/// Version 0.10 keeps the API keys only in the store setting, and drops the per-store 1Click URL.
 /// </summary>
 public class LegacyIdMigration(StoreRepository storeRepository, ILogger<LegacyIdMigration> logger) : IStartupTask
 {
@@ -29,8 +30,18 @@ public class LegacyIdMigration(StoreRepository storeRepository, ILogger<LegacyId
         {
             var exchange = MoveExchangeOptions(store);
             var thorchain = RemoveThorchain(store);
-            if (!Migrate(store) && exchange is null && !thorchain)
+            var keys = StripSecrets(store);
+            if (!Migrate(store) && exchange is null && !thorchain && keys is null)
                 continue;
+            if (keys is not null)
+            {
+                // Keep the keys in the store setting before removing them from the payment methods.
+                var setting = await storeRepository.GetSettingAsync<SwapToBtcPaymentMethodConfig>(store.Id, Controllers.UISwapStoreController.StoreSettingName)
+                              ?? keys.Value.Config;
+                setting.ApiKey ??= keys.Value.ApiKey;
+                setting.IntentsApiKey ??= keys.Value.IntentsApiKey;
+                await storeRepository.UpdateSetting(store.Id, Controllers.UISwapStoreController.StoreSettingName, setting);
+            }
             await storeRepository.UpdateStore(store);
             if (exchange is { Length: > 0 })
             {
@@ -108,6 +119,36 @@ public class LegacyIdMigration(StoreRepository storeRepository, ILogger<LegacyId
         }
         return on.ToArray();
     }
+
+    static readonly string[] SecretFields = ["apiKey", "ApiKey", "intentsApiKey", "IntentsApiKey", "intentsUrl", "IntentsUrl"];
+
+    /// <summary>
+    /// Removes the API keys and the 1Click URL from every swap payment method (BTCPay's API returns those configs).
+    /// Returns the keys found, and one config to seed the store setting with, or null when there were none.
+    /// </summary>
+    public static (string? ApiKey, string? IntentsApiKey, SwapToBtcPaymentMethodConfig Config)? StripSecrets(StoreData store)
+    {
+        string? apiKey = null, intentsApiKey = null;
+        SwapToBtcPaymentMethodConfig? seed = null;
+        var changed = false;
+        foreach (var chain in SwapSourceChain.PaymentMethods)
+        {
+            if (store.GetPaymentMethodConfig(chain.PaymentMethodId) is not JObject config ||
+                !config.Properties().Any(p => SecretFields.Contains(p.Name)))
+                continue;
+            seed ??= config.ToObject<SwapToBtcPaymentMethodConfig>();
+            apiKey ??= Value(config, "apiKey", "ApiKey");
+            intentsApiKey ??= Value(config, "intentsApiKey", "IntentsApiKey");
+            foreach (var name in SecretFields)
+                config.Remove(name);
+            store.SetPaymentMethodConfig(chain.PaymentMethodId, config);
+            changed = true;
+        }
+        return changed ? (apiKey, intentsApiKey, seed ?? new SwapToBtcPaymentMethodConfig()) : null;
+    }
+
+    static string? Value(JObject config, params string[] names) =>
+        names.Select(n => config[n]?.Type == JTokenType.String ? config[n]!.ToString() : null).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
 
     /// <summary>Removes every THOR_ payment method. Returns true when the store changed.</summary>
     public static bool RemoveThorchain(StoreData store)

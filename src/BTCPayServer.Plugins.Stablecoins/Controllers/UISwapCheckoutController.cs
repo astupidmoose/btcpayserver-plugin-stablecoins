@@ -1,6 +1,5 @@
 #nullable enable
 using System;
-using System.Collections.Concurrent;
 using System.Globalization;
 using System.Linq;
 using System.Threading;
@@ -13,6 +12,7 @@ using BTCPayServer.Plugins.Stablecoins.Swap;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
@@ -29,11 +29,10 @@ public class UISwapCheckoutController(
     StoreRepository storeRepository,
     PaymentMethodHandlerDictionary handlers,
     Intents.IntentsDepositService intents,
+    SourceVerifier verifier,
+    CheckoutNotes notes,
     ILogger<UISwapCheckoutController> logger) : Controller
 {
-    // Keeps one invoice from filling its log: a handful of source transactions and quotes is plenty.
-    static readonly ConcurrentDictionary<string, byte> Logged = new();
-    const int MaxNotesPerInvoice = 20;
 
     public class SourceTransaction
     {
@@ -62,18 +61,21 @@ public class UISwapCheckoutController(
             return BadRequest(new { error = "That does not look like a wallet address." });
         if (txHash is null && from is null)
             return BadRequest(new { error = "Nothing to record." });
+        if (!notes.AllowCaller(HttpContext.Connection.RemoteIpAddress?.ToString()))
+            return StatusCode(429, new { error = "Too many requests." });
         var invoice = await invoiceRepository.GetInvoice(invoiceId);
-        if (invoice?.GetPaymentPrompt(pmi) is not { Activated: true })
+        if (invoice?.GetPaymentPrompt(pmi) is not { Activated: true, Destination: { } btcAddress })
             return NotFound();
+        // Anyone with the invoice id can call this, so what it records is marked as the customer's claim.
+        // Only a transaction LI.FI confirms pays this invoice's address becomes searchable (SourceVerifier).
         if (from is not null)
         {
             var paying = IsShortText(body!.Amount) && IsShortText(body.Token) ? $"{body.Amount} {body.Token}" : "tokens";
-            if (await Note(invoiceId, $"from:{from}", $"Customer started paying {paying} on {chain.Name} from wallet {from}."))
-                await invoiceRepository.AddSearchTerms(invoiceId, [from]);
+            await Note(invoiceId, $"from:{from}", $"Customer-reported, unverified: started paying {paying} on {chain.Name} from wallet {from}.");
         }
         if (txHash is not null &&
-            await Note(invoiceId, $"tx:{txHash}", $"Customer's {chain.Name} transaction for this swap: {txHash}. Track it at {ExplorerLink(chain, txHash)}"))
-            await invoiceRepository.AddSearchTerms(invoiceId, [txHash]);
+            await Note(invoiceId, $"tx:{txHash}", $"Customer-reported, unverified: {chain.Name} transaction {txHash}. Checking it with LI.FI."))
+            verifier.Enqueue(invoiceId, chain.Name, txHash, btcAddress);
         return Json(new { ok = true });
     }
 
@@ -88,37 +90,44 @@ public class UISwapCheckoutController(
         public string? Option { get; set; }
     }
 
-    /// <summary>"Send USDC from an exchange" on a token checkout, or back to the wallet panel.</summary>
+    /// <summary>
+    /// "Send USDC from an exchange" on a token checkout, or back to the wallet panel (null). The choice is this browser's own
+    /// (a cookie), so nobody else can switch the customer's view; the deposit is quoted when the checkout next loads.
+    /// </summary>
     [HttpPost("deposits/{invoiceId}/{paymentMethodId}/option")]
     public async Task<IActionResult> Option(string invoiceId, string paymentMethodId, [FromBody] OptionChoice body)
     {
+        if (!notes.AllowCaller(HttpContext.Connection.RemoteIpAddress?.ToString()))
+            return StatusCode(429, new { error = "Too many requests." });
         if (await TokenCheckout(invoiceId, paymentMethodId) is not var (tokens, config))
             return NotFound();
+        var cookie = SwapToBtcCheckoutModelExtension.ChoiceCookie(invoiceId);
         if (body?.Option is not { } code)
         {
-            intents.Choose(invoiceId, null);
+            Response.Cookies.Delete(cookie, new CookieOptions { Path = "/" });
             return Json(new { ok = true });
         }
-        if (config.ExchangeOptionsFor(tokens).FirstOrDefault(o => o.Code.Equals(code, StringComparison.OrdinalIgnoreCase)) is not { } option ||
-            !intents.Select(option, config, invoiceId, tokens.IntentsNetworkCode!))
+        if (config.ExchangeOptionsFor(tokens).FirstOrDefault(o => o.Code.Equals(code, StringComparison.OrdinalIgnoreCase)) is not { } option)
             return BadRequest(new { error = "That option is not available for this payment." });
-        intents.Choose(invoiceId, option);
+        Response.Cookies.Append(cookie, option.Code, new CookieOptions
+        {
+            Path = "/", HttpOnly = true, SameSite = SameSiteMode.Lax, Secure = Request.IsHttps, MaxAge = TimeSpan.FromDays(2)
+        });
         await Note(invoiceId, $"option:{option.Code}:{tokens.Code}",
             $"Customer chose to send {option.Ticker} on {tokens.Name} from an exchange (NEAR Intents).");
         return Json(new { ok = true });
     }
 
-    /// <summary>The exchange option's network picker. The deposit address for that network is prepared in the background.</summary>
+    /// <summary>Kept for checkouts loaded before 0.10: the network is always the token checkout's own.</summary>
     [HttpPost("deposits/{invoiceId}/{paymentMethodId}/{option}/network")]
     public async Task<IActionResult> Network(string invoiceId, string paymentMethodId, string option, [FromBody] NetworkChoice body)
     {
         if (await TokenCheckout(invoiceId, paymentMethodId) is not var (tokens, config) ||
-            config.ExchangeOptionsFor(tokens).FirstOrDefault(o => o.Code.Equals(option, StringComparison.OrdinalIgnoreCase)) is not { } chain)
+            config.ExchangeOptionsFor(tokens).FirstOrDefault(o => o.Code.Equals(option, StringComparison.OrdinalIgnoreCase)) is null)
             return NotFound();
-        if (body?.Network is not { } network || network != tokens.IntentsNetworkCode || !intents.Select(chain, config, invoiceId, network))
-            return BadRequest(new { error = "That network is not available for this payment." });
-        await Note(invoiceId, $"network:{chain.Code}:{network}", $"Customer chose to send {chain.Ticker} on {chain.Networks.First(n => n.Code == network).Name}.");
-        return Json(new { ok = true });
+        return body?.Network == tokens.IntentsNetworkCode
+            ? Json(new { ok = true })
+            : BadRequest(new { error = "That network is not available for this payment." });
     }
 
     /// <summary>A token checkout of an unpaid invoice and its settings, or null.</summary>
@@ -149,9 +158,7 @@ public class UISwapCheckoutController(
     /// <summary>Adds a line to the invoice's log, once per key. False when it was already noted (or the invoice has enough notes).</summary>
     async Task<bool> Note(string invoiceId, string key, string message)
     {
-        var prefix = invoiceId + ":";
-        if (Logged.Keys.Count(k => k.StartsWith(prefix, StringComparison.Ordinal)) >= MaxNotesPerInvoice ||
-            !Logged.TryAdd(prefix + key, 0))
+        if (!notes.TryAdd(invoiceId, key))
             return false;
         var logs = new InvoiceLogs();
         logs.Write(message, InvoiceEventData.EventSeverity.Info);

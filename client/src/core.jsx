@@ -190,9 +190,12 @@ function Panel({ opts, client, chain }) {
 
   const fromAmount = quote ? BigInt(quote.action.fromAmount) : null;
   const enough = fromAmount !== null && token && token.amount >= fromAmount;
+  // The route's worst case must still cover the invoice: otherwise the customer pays in full and the invoice stays partly unpaid.
+  const minOut = quote?.estimate?.toAmountMin ? BigInt(quote.estimate.toAmountMin) : null;
+  const safe = minOut !== null && minOut * 100n >= BigInt(toSats(opts.btcDue)) * BigInt(Math.round(MIN_ACCEPTED_OUTPUT * 100));
 
   const pay = async () => {
-    if (!quote || !enough) return;
+    if (!quote || !enough || !safe) return;
     setStatus('paying'); setPayError(null);
     const requested = BigInt(toSats(opts.btcDue));
     const seen = new Set();
@@ -322,7 +325,10 @@ function Panel({ opts, client, chain }) {
             <div className="alert alert-warning small">Not enough {token.symbol} in this wallet. Pick another token.</div>
           )}
           {payError && <div className="alert alert-warning small">{payError}</div>}
-          <button type="button" className="btn btn-primary w-100" disabled={!quote || !enough} onClick={pay}>
+          {quote && enough && !safe && (
+            <div className="alert alert-warning small">This token's route could deliver too little right now. Pick another token or try again shortly.</div>
+          )}
+          <button type="button" className="btn btn-primary w-100" disabled={!quote || !enough || !safe} onClick={pay}>
             {quote ? `Pay ${formatAmount(fromAmount, token.decimals)} ${token.symbol}` : 'Pay'}
           </button>
         </>

@@ -35,7 +35,15 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
         services.AddHttpClient(Intents.OneClickClient.HttpClientName);
         services.AddSingleton(provider => new Intents.OneClickClient(
             provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(Intents.OneClickClient.HttpClientName)));
+        services.AddSingleton<SwapSecrets>();
         services.AddSingleton<Intents.IntentsDepositService>();
+        services.AddHostedService<Intents.IntentsTracker>();
+        services.AddHttpClient(LifiStatusClient.HttpClientName);
+        services.AddSingleton(provider => new LifiStatusClient(
+            provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(LifiStatusClient.HttpClientName)));
+        services.AddSingleton<SourceVerifier>();
+        services.AddHostedService(p => p.GetRequiredService<SourceVerifier>());
+        services.AddSingleton<Controllers.CheckoutNotes>();
 
         var btcTxLink = networkType == ChainName.Mainnet ? "https://mempool.space/tx/{0}" : "https://mempool.space/testnet/tx/{0}";
         foreach (var source in SwapSourceChain.PaymentMethods)

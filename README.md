@@ -43,21 +43,27 @@ Payment method ids use underscores, not dashes: some store integrations send the
 
 For support, the invoice log records:
 
-- **Wallet payments:** the customer's wallet address, token and amount as soon as they press pay (before signing), then each transaction they sign, linked to scan.li.fi.
-- **Exchange payments:** each NEAR Intents quote (deposit address, amount, deadline, refund address, quote id), its status changes, why a quote failed, the customer's deposit transaction and NEAR Intents' BTC payout transaction.
+- **Wallet payments:** what the customer's browser reports when they press pay (wallet address, token, amount) and each transaction they sign, marked "Customer-reported, unverified". The server then asks LI.FI about each transaction hash: once LI.FI confirms it pays this invoice's address, the log says so and the wallet address and transaction hashes are added to the invoice's search terms. A hash LI.FI says pays somewhere else is logged as a warning.
+- **Exchange payments:** each NEAR Intents quote (deposit address, amount, deadline, refund address, quote id), its status changes, why a quote failed, the customer's deposit transaction and NEAR Intents' BTC payout transaction. Quotes are saved with the invoice and followed by the server until they settle, even after the customer closes the checkout or BTCPay restarts. The deposit address, quote id and transaction hashes are added to the search terms.
 
-The wallet address, transaction hashes, deposit address and quote id are also added to the invoice's search terms, so pasting whatever the customer sends you (their wallet, a transaction hash, the address they paid) into the Invoices search finds the invoice.
+Pasting whatever the customer sends you (their wallet, a transaction hash, the address they paid) into the Invoices search finds the invoice once the provider has confirmed it. Unverified reports are in the invoice log only.
 
 ## Settings (per store)
 
 - An Enable switch for the whole feature. Off removes every chain from every checkout but keeps your choices.
 - Which chains are enabled, and USDC/USDT from an exchange.
-- LI.FI: integrator name (from [portal.li.fi](https://portal.li.fi)), optional API key, integrator fee (default 0).
+- LI.FI: integrator name (from [portal.li.fi](https://portal.li.fi)), optional API key, integrator fee (default 0). LI.FI's key is sent to the customer's browser, as LI.FI requires, so only set one if you hit rate limits.
 - WalletConnect project ID (optional): lets customers connect a mobile EVM wallet by scanning a QR code; browser wallets work without it. To get one, sign up free at [Reown](https://cloud.reown.com) (formerly WalletConnect Cloud), create a project, copy its Project ID into this field, and add your BTCPay domain (for example `btcpay.example.com`) to the project's allowed domains.
-- NEAR Intents: 1Click API key, refund addresses (EVM, Solana, Tron), price tolerance (default 50 bps).
+- NEAR Intents: 1Click API key, refund addresses (EVM, Solana, Tron), price tolerance (default 50 bps). The 1Click key stays on the server.
+
+API keys are write-only on the settings page and are kept only in the plugin's own store setting, never in the payment method settings that BTCPay's API returns.
 - Amount buffer: extra BTC asked from the customer (default 0). Leave it at 0 and set the store's payment tolerance to about 1% to absorb small shortfalls yourself.
 
 Also set a longer invoice expiry (for example 60 minutes): swaps to BTC usually take several minutes.
+
+## Privacy and third parties
+
+On a checkout that offers these payment methods, the customer's browser talks to LI.FI (li.quest), the chain's public RPC endpoints, and, when a mobile wallet connects by QR code, WalletConnect/Reown relays. Wallet addresses and amounts are visible to them, as with any wallet payment. The BTCPay server talks to LI.FI (transaction status) and NEAR Intents' 1Click API (quotes and status). Nothing is sent anywhere else.
 
 ## Build, test, package
 
@@ -69,7 +75,9 @@ dotnet build src/BTCPayServer.Plugins.Stablecoins/BTCPayServer.Plugins.Stablecoi
 dotnet test --project tests/BTCPayServer.Plugins.Stablecoins.Tests/BTCPayServer.Plugins.Stablecoins.Tests.csproj
 ```
 
-The panel bundles are committed. To rebuild them: `cd client && npm ci && npm run build`.
+The panel bundles are committed. To rebuild them: `cd client && npm ci && npm run build`. Dependencies are pinned to exact versions, and the build stops if `npm audit` reports a high-severity issue in a runtime dependency.
+
+For local testing against a fake 1Click server, set `BTCPAY_STABLECOINS_ONECLICK_URL`.
 
 To make an installable package the same way the [Plugin Builder](https://plugin-builder.btcpayserver.org/) does:
 

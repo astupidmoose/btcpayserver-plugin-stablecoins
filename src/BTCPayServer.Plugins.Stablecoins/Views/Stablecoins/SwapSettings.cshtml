@@ -60,8 +60,16 @@
             </div>
             <div class="form-group">
                 <label asp-for="ApiKey" class="form-label"></label>
-                <input asp-for="ApiKey" class="form-control font-monospace" autocomplete="off" spellcheck="false" />
-                <div class="form-text">Raises LI.FI's rate limits. It is visible in the checkout page's source, as LI.FI's widget requires.</div>
+                <input asp-for="ApiKey" type="password" value="" class="form-control font-monospace" autocomplete="new-password" spellcheck="false"
+                       placeholder="@(Model.HasApiKey ? "A key is set. Type a new one to replace it." : "")" />
+                @if (Model.HasApiKey)
+                {
+                    <div class="form-check mt-2">
+                        <input asp-for="ClearApiKey" type="checkbox" class="form-check-input" />
+                        <label asp-for="ClearApiKey" class="form-check-label"></label>
+                    </div>
+                }
+                <div class="form-text">Only needed if LI.FI's rate limits get in the way. Anyone who opens a checkout can read it, as LI.FI requires, so leave it empty unless you need it.</div>
             </div>
             <div class="form-group">
                 <label asp-for="WalletConnectProjectId" class="form-label"></label>
@@ -93,7 +101,15 @@
             </div>
             <div class="form-group">
                 <label asp-for="IntentsApiKey" class="form-label"></label>
-                <input asp-for="IntentsApiKey" class="form-control font-monospace" autocomplete="off" spellcheck="false" />
+                <input asp-for="IntentsApiKey" type="password" value="" class="form-control font-monospace" autocomplete="new-password" spellcheck="false"
+                       placeholder="@(Model.HasIntentsApiKey ? "A key is set. Type a new one to replace it." : "")" />
+                @if (Model.HasIntentsApiKey)
+                {
+                    <div class="form-check mt-2">
+                        <input asp-for="ClearIntentsApiKey" type="checkbox" class="form-check-input" />
+                        <label asp-for="ClearIntentsApiKey" class="form-check-label"></label>
+                    </div>
+                }
                 <div class="form-text">From NEAR Intents (see the Authentication section of their <a href="https://github.com/defuse-protocol/one-click-sdk-typescript#authentication" target="_blank" rel="noreferrer noopener">1Click SDK</a>). It stays on this server.</div>
             </div>
             <div class="form-group">
@@ -122,7 +138,6 @@
                 <span asp-validation-for="IntentsSlippageBps" class="text-danger"></span>
                 <div class="form-text">The amount shown includes this margin so BTC price moves don't fail the swap. Whatever it doesn't use comes back to your refund address. 50 = 0.5%.</div>
             </div>
-            <input type="hidden" asp-for="IntentsUrl" />
 
             <h4 class="mt-5 mb-2">Both</h4>
             <div class="form-group">

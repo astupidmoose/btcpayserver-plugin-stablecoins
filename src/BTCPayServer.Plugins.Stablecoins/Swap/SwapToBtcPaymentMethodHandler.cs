@@ -142,6 +142,15 @@ public class SwapToBtcPaymentMethodHandler(
             yield return (nameof(config.Fee), "The fee must be at least 0 and below 10%.");
         if (config.BufferPercent is < 0m or > 5m)
             yield return (nameof(config.BufferPercent), "The buffer must be between 0% and 5%.");
+        // Checked here so the settings page and BTCPay's API refuse the same things.
+        if (config.RefundEvm is { Length: > 0 } evm && !AddressChecks.IsEvmAddress(evm.Trim()))
+            yield return (nameof(config.RefundEvm), "The EVM refund address should be 0x followed by 40 hex characters, with a valid checksum if it mixes upper and lower case.");
+        if (config.RefundSolana is { Length: > 0 } sol && !AddressChecks.IsSolanaAddress(sol.Trim()))
+            yield return (nameof(config.RefundSolana), "That does not look like a Solana address.");
+        if (config.RefundTron is { Length: > 0 } tron && !AddressChecks.IsTronAddress(tron.Trim()))
+            yield return (nameof(config.RefundTron), "A Tron address starts with T and has 34 characters.");
+        if (config.IntentsSlippageBps is < 1 or > 1000)
+            yield return (nameof(config.IntentsSlippageBps), "The price tolerance must be between 1 and 1000 basis points.");
     }
 
     public SwapToBtcPromptDetails ParsePaymentPromptDetails(JToken details) =>

@@ -21,7 +21,7 @@ namespace BTCPayServer.Plugins.Stablecoins.Controllers;
 [Route("stores/{storeId}/stablecoins/swap")]
 [Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie)]
 [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-public class UISwapStoreController(StoreRepository storeRepository, PaymentMethodHandlerDictionary handlers,
+public class UISwapStoreController(StoreRepository storeRepository, PaymentMethodHandlerDictionary handlers, SwapSecrets secrets,
     ILogger<UISwapStoreController> logger) : Controller
 {
     public const string SettingsView = StablecoinsPlugin.ViewsDirectory + "/SwapSettings.cshtml";
@@ -50,16 +50,15 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             HasBtcWallet = store.GetDerivationSchemeSettings(handlers, "BTC") is not null,
             Enabled = !any.Disabled,
             Integrator = any.Integrator ?? SwapDefaults.Integrator,
-            ApiKey = any.ApiKey,
+            HasApiKey = !string.IsNullOrEmpty(any.ApiKey),
             FeePercent = any.Fee * 100m,
             BufferPercent = any.BufferPercent,
             WalletConnectProjectId = any.WalletConnectProjectId,
-            IntentsApiKey = any.IntentsApiKey,
+            HasIntentsApiKey = !string.IsNullOrEmpty(any.IntentsApiKey),
             RefundEvm = any.RefundEvm,
             RefundSolana = any.RefundSolana,
             RefundTron = any.RefundTron,
             IntentsSlippageBps = any.IntentsSlippageBps,
-            IntentsUrl = any.IntentsUrl,
             Chains = chains.Select(c => new SwapChainViewModel
             {
                 Code = c.Chain.Code,
@@ -78,15 +77,18 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         var store = StoreData;
         logger.LogInformation("Saving swap settings of store {StoreId}", store.Id);
         vm.HasBtcWallet = store.GetDerivationSchemeSettings(handlers, "BTC") is not null;
+        var saved = await storeRepository.GetSettingAsync<SwapToBtcPaymentMethodConfig>(store.Id, StoreSettingName);
+        vm.HasApiKey = !string.IsNullOrEmpty(saved?.ApiKey);
+        vm.HasIntentsApiKey = !string.IsNullOrEmpty(saved?.IntentsApiKey);
         var config = new SwapToBtcPaymentMethodConfig
         {
             Integrator = vm.Integrator?.Trim(),
-            ApiKey = string.IsNullOrWhiteSpace(vm.ApiKey) ? null : vm.ApiKey.Trim(),
+            // Keys are write-only on the page: an empty field keeps the saved key.
+            ApiKey = vm.ClearApiKey ? null : Clean(vm.ApiKey) ?? saved?.ApiKey,
             Fee = vm.FeePercent / 100m,
             BufferPercent = vm.BufferPercent,
             WalletConnectProjectId = string.IsNullOrWhiteSpace(vm.WalletConnectProjectId) ? null : vm.WalletConnectProjectId.Trim(),
-            IntentsApiKey = Clean(vm.IntentsApiKey),
-            IntentsUrl = Clean(vm.IntentsUrl),
+            IntentsApiKey = vm.ClearIntentsApiKey ? null : Clean(vm.IntentsApiKey) ?? saved?.IntentsApiKey,
             RefundEvm = Clean(vm.RefundEvm),
             RefundSolana = Clean(vm.RefundSolana),
             RefundTron = Clean(vm.RefundTron),
@@ -94,12 +96,6 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         };
         foreach (var (field, message) in SwapToBtcPaymentMethodHandler.Validate(config))
             ModelState.AddModelError(field == nameof(config.Fee) ? nameof(vm.FeePercent) : field, message);
-        if (config.RefundEvm is { } evm && !IsEvmAddress(evm))
-            ModelState.AddModelError(nameof(vm.RefundEvm), "The EVM refund address should be 0x followed by 40 hex characters.");
-        if (config.RefundSolana is { } sol && !IsBase58(sol, 32, 44))
-            ModelState.AddModelError(nameof(vm.RefundSolana), "That does not look like a Solana address.");
-        if (config.RefundTron is { } tron && !(tron.StartsWith('T') && IsBase58(tron, 34, 34)))
-            ModelState.AddModelError(nameof(vm.RefundTron), "A Tron address starts with T and has 34 characters.");
         var enabled = vm.Chains.Where(c => c.Enabled).Select(c => SwapSourceChain.Find(c.Code)).OfType<SwapSourceChain>().ToHashSet();
         var exchange = enabled.Where(c => c.Provider == SwapProvider.Intents).ToList();
         config.ExchangeOptions = exchange.Select(c => c.Code).ToArray();
@@ -126,17 +122,22 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         }
 
         var blob = store.GetStoreBlob();
+        // The payment method configs are returned by BTCPay's API: they get everything but the keys.
+        var withoutKeys = Newtonsoft.Json.JsonConvert.DeserializeObject<SwapToBtcPaymentMethodConfig>(Newtonsoft.Json.JsonConvert.SerializeObject(config))!;
+        withoutKeys.ApiKey = null;
+        withoutKeys.IntentsApiKey = null;
         foreach (var chain in SwapSourceChain.PaymentMethods)
         {
             var handler = handlers[chain.PaymentMethodId];
             var on = vm.Enabled && enabled.Contains(chain);
             // Disabled chains are removed, not just excluded, so store integrations stop listing them.
-            store.SetPaymentMethodConfig(handler, on ? config : null);
+            store.SetPaymentMethodConfig(handler, on ? withoutKeys : null);
             blob.SetExcluded(chain.PaymentMethodId, !on);
         }
         store.SetStoreBlob(blob);
         await storeRepository.UpdateStore(store);
         await storeRepository.UpdateSetting(store.Id, StoreSettingName, config);
+        secrets.Set(store.Id, config);
         logger.LogInformation("Swap settings of store {StoreId} saved, {Count} chains enabled", store.Id, enabled.Count);
 
         TempData.SetStatusMessageModel(new StatusMessageModel
@@ -153,11 +154,7 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
 
     static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    public static bool IsEvmAddress(string value) =>
-        value.Length == 42 && value.StartsWith("0x", System.StringComparison.OrdinalIgnoreCase) && value.Skip(2).All(System.Uri.IsHexDigit);
-
-    static bool IsBase58(string value, int min, int max) =>
-        value.Length >= min && value.Length <= max && value.All(c => "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".Contains(c));
+    public static bool IsEvmAddress(string value) => AddressChecks.IsEvmAddress(value);
 
     static void FillChains(SwapSettingsViewModel vm)
     {
@@ -186,6 +183,9 @@ public class SwapSettingsViewModel
 
     [Display(Name = "LI.FI API key (optional)")]
     public string? ApiKey { get; set; }
+    public bool HasApiKey { get; set; }
+    [Display(Name = "Remove the saved key")]
+    public bool ClearApiKey { get; set; }
 
     [Display(Name = "Integrator fee (%)")]
     [Range(0, 9.99)]
@@ -200,6 +200,9 @@ public class SwapSettingsViewModel
 
     [Display(Name = "NEAR Intents API key")]
     public string? IntentsApiKey { get; set; }
+    public bool HasIntentsApiKey { get; set; }
+    [Display(Name = "Remove the saved key")]
+    public bool ClearIntentsApiKey { get; set; }
 
     [Display(Name = "Refund address for EVM networks (Ethereum, Base, Polygon...)")]
     public string? RefundEvm { get; set; }
@@ -214,8 +217,6 @@ public class SwapSettingsViewModel
     [Range(1, 1000)]
     public int IntentsSlippageBps { get; set; } = SwapDefaults.IntentsSlippageBps;
 
-    /// <summary>Not on the page; kept so a save does not drop a custom endpoint (used for testing).</summary>
-    public string? IntentsUrl { get; set; }
 
     public List<SwapChainViewModel> Chains { get; set; } = new();
 }

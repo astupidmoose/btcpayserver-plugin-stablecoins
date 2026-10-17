@@ -34,6 +34,7 @@ public class SwapToBtcListener(
     PaymentMethodHandlerDictionary handlers,
     BTCPayNetworkProvider networkProvider,
     BTCPayWalletProvider walletProvider,
+    ExplorerClientProvider explorerClientProvider,
     ILogger<SwapToBtcListener> logger) : EventHostedServiceBase(eventAggregator, logger)
 {
     BTCPayNetwork Network => networkProvider.BTC;
@@ -134,7 +135,9 @@ public class SwapToBtcListener(
     public async Task Sweep(CancellationToken cancellationToken)
     {
         var wallet = walletProvider.GetWallet(Network);
-        var coinsByStrategy = new Dictionary<string, ReceivedCoin[]>();
+        // Every output the wallet received, spent or not: a payment that arrived while BTCPay was down may already be spent.
+        var coinsByStrategy = new Dictionary<string, (OutPoint OutPoint, Script ScriptPubKey, IMoney Value, KeyPath? KeyPath)[]>();
+        var explorer = explorerClientProvider.GetExplorerClient(Network);
         foreach (var handler in SwapHandlers)
         {
             var pmi = handler.PaymentMethodId;
@@ -152,7 +155,10 @@ public class SwapToBtcListener(
                         if (!coinsByStrategy.TryGetValue(derivation, out var coins))
                         {
                             var strategy = Network.NBXplorerNetwork.DerivationStrategyFactory.Parse(derivation);
-                            coins = await wallet.GetUnspentCoins(strategy, cancellation: cancellationToken);
+                            var history = await explorer.GetTransactionsAsync(strategy, cancellation: cancellationToken);
+                            coins = history.ConfirmedTransactions.Transactions.Concat(history.UnconfirmedTransactions.Transactions)
+                                .SelectMany(t => t.Outputs.Select(o => (new OutPoint(t.TransactionId, o.Index), o.ScriptPubKey, o.Value, (KeyPath?)o.KeyPath)))
+                                .ToArray();
                             coinsByStrategy.Add(derivation, coins);
                         }
                         var known = invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi).Select(p => p.Id).ToHashSet();

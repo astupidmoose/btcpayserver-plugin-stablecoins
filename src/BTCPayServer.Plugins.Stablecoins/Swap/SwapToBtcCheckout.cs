@@ -36,6 +36,7 @@ public class SwapToBtcPaymentLinkExtension(SwapToBtcPaymentMethodHandler handler
 public class SwapToBtcCheckoutModelExtension(
     SwapToBtcPaymentMethodHandler handler,
     IntentsDepositService intents,
+    SwapSecrets secrets,
     DisplayFormatter displayFormatter) : ICheckoutModelExtension
 {
     public const string CheckoutBodyComponentName = "StablecoinsSwapCheckout";
@@ -63,9 +64,9 @@ public class SwapToBtcCheckoutModelExtension(
         // Token checkouts also offer "Send USDC from an exchange": a deposit address paid into this checkout's BTC address.
         var options = config.ExchangeOptionsFor(handler.Chain).ToList();
         // NEAR Intents sets temporary minimums per network: hide the buttons on invoices it recently refused as too small.
-        var chosenBefore = intents.Chosen(context.InvoiceEntity.Id);
+        var chosenBefore = ChosenOption(context);
         options = options.Where(o => o == chosenBefore || !intents.BelowMinimum(handler.Chain.IntentsNetworkCode, accounting.Due)).ToList();
-        var chosen = intents.Chosen(context.InvoiceEntity.Id) is { } c && options.Contains(c) ? c : null;
+        var chosen = chosenBefore is { } c && options.Contains(c) ? c : null;
         if (chosen is not null)
             ModifyForDeposit(context, config, chosen, address, accounting);
         else
@@ -84,6 +85,17 @@ public class SwapToBtcCheckoutModelExtension(
     }
 
     public const string ExchangeDataKey = "stablecoinsExchange";
+
+    /// <summary>
+    /// The exchange option this browser picked for the invoice ("Send USDC from an exchange"), kept in a cookie: a choice is the
+    /// customer's own view, so someone else who knows the invoice id cannot switch or reset it.
+    /// </summary>
+    public static string ChoiceCookie(string invoiceId) => "stablecoins-exchange-" + invoiceId;
+
+    static SwapSourceChain? ChosenOption(CheckoutModelContext context) =>
+        context.UrlHelper.ActionContext.HttpContext.Request.Cookies.TryGetValue(ChoiceCookie(context.InvoiceEntity.Id), out var code)
+            ? SwapSourceChain.ExchangeOptions.FirstOrDefault(o => o.Code == code)
+            : null;
 
     /// <summary>
     /// BTCPay's own on-chain checkout body, with a network picker above it.
@@ -126,10 +138,15 @@ public class SwapToBtcCheckoutModelExtension(
             return;
         }
 
-        var status = intents.Get(chain, config, invoice.Id, btcAddress, accounting.Due, invoice.ExpirationTime);
-        // Came from another token checkout (Ethereum, then Base): switch to this one's network, unless a deposit is on its way.
-        if (networks.Count == 1 && status.Network != networks[0].Code && intents.Select(chain, config, invoice.Id, networks[0].Code))
-            status = intents.Get(chain, config, invoice.Id, btcAddress, accounting.Due, invoice.ExpirationTime);
+        if (networks.Count == 0)
+        {
+            data["state"] = "failed";
+            data["error"] = "This payment option is unavailable for this network.";
+            return;
+        }
+        // Each token checkout has its own deposit on its own network; switching between them never drops a quote.
+        var status = intents.Get(chain, config, context.Store.Id, handler.PaymentMethodId, invoice.Id, networks[0].Code, btcAddress,
+            accounting.Due, invoice.ExpirationTime);
         data["state"] = status.State.ToString().ToLowerInvariant();
         data["network"] = status.Network;
         data["networkName"] = chain.Networks.FirstOrDefault(n => n.Code == status.Network)?.Name;
@@ -188,7 +205,8 @@ public class SwapToBtcCheckoutModelExtension(
             ["btcDue"] = accounting.Due.ToString(CultureInfo.InvariantCulture),
             ["active"] = invoice.Status == InvoiceStatus.New && accounting.Due > 0m,
             ["integrator"] = string.IsNullOrWhiteSpace(config.Integrator) ? SwapDefaults.Integrator : config.Integrator,
-            ["apiKey"] = config.ApiKey,
+            // Optional: LI.FI designs this key for browsers, but anyone who opens the checkout can read it.
+            ["apiKey"] = secrets.Get(context.Store.Id).LifiApiKey ?? config.ApiKey,
             ["fee"] = config.Fee,
             ["bufferPercent"] = config.BufferPercent,
             ["walletConnectProjectId"] = config.WalletConnectProjectId,

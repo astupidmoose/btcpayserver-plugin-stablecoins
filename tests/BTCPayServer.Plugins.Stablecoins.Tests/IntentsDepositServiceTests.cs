@@ -21,6 +21,7 @@ public class IntentsDepositServiceTests
         public string Status { get; set; } = "PENDING_DEPOSIT";
         public string? Authorization { get; private set; }
         public decimal? MinimumUsd { get; set; }
+        public int StatusCalls;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -62,7 +63,7 @@ public class IntentsDepositServiceTests
                     }
                 }.ToString();
             }
-            else if (path == "/v0/status")
+            else if (path == "/v0/status" && ++StatusCalls > 0)
                 json = new JObject { ["status"] = Status, ["swapDetails"] = new JObject { ["depositedAmount"] = "10000000" } }.ToString();
             else
                 return new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("""{"message":"not found"}""") };
@@ -73,21 +74,29 @@ public class IntentsDepositServiceTests
     static (IntentsDepositService Service, FakeOneClick Fake) Create(FakeOneClick? fake = null)
     {
         fake ??= new FakeOneClick();
-        return (new IntentsDepositService(new OneClickClient(new HttpClient(fake)), null!, NullLogger<IntentsDepositService>.Instance), fake);
+        var service = new IntentsDepositService(new OneClickClient(new HttpClient(fake)), null!, NullLogger<IntentsDepositService>.Instance)
+        {
+            BaseUrl = new Uri("https://oneclick.example.com")
+        };
+        return (service, fake);
     }
 
     static SwapToBtcPaymentMethodConfig Config() => new()
     {
         IntentsApiKey = "jwt",
-        IntentsUrl = "https://oneclick.example.com",
         RefundEvm = "0x2527D02599Ba641c19FEa793cD0F167589a0f10D"
     };
 
-    static async Task<IntentsStatus> Settle(IntentsDepositService service, string invoiceId = "inv1", decimal btcDue = 0.001m)
+    static readonly BTCPayServer.Payments.PaymentMethodId Pmi = new("LIFI_POLYGON");
+
+    static IntentsStatus Get(IntentsDepositService service, string invoiceId, string network, decimal btcDue) =>
+        service.Get(Usdc, Config(), "store", Pmi, invoiceId, network, BtcAddress, btcDue, DateTimeOffset.UtcNow.AddHours(1));
+
+    static async Task<IntentsStatus> Settle(IntentsDepositService service, string invoiceId = "inv1", decimal btcDue = 0.001m, string network = "pol")
     {
-        service.Get(Usdc, Config(), invoiceId, BtcAddress, btcDue, DateTimeOffset.UtcNow.AddHours(1));
-        await service.Pending(invoiceId, Usdc);
-        return service.Get(Usdc, Config(), invoiceId, BtcAddress, btcDue, DateTimeOffset.UtcNow.AddHours(1));
+        Get(service, invoiceId, network, btcDue);
+        await service.Pending(invoiceId, Usdc, network);
+        return Get(service, invoiceId, network, btcDue);
     }
 
     [Fact]
@@ -100,13 +109,9 @@ public class IntentsDepositServiceTests
     }
 
     [Fact]
-    public async Task WaitsForANetworkThenQuotesTheBtcDueToTheInvoiceAddress()
+    public async Task QuotesTheBtcDueToTheInvoiceAddress()
     {
         var (service, fake) = Create();
-        Assert.Equal(IntentsState.ChooseNetwork, (await Settle(service)).State);
-        Assert.Empty(fake.Quotes);
-
-        Assert.True(service.Select(Usdc, Config(), "inv1", "pol"));
         var status = await Settle(service);
 
         Assert.Equal(IntentsState.Ready, status.State);
@@ -130,7 +135,6 @@ public class IntentsDepositServiceTests
 
         var (service, fake) = Create(new FakeOneClick { MinimumUsd = 100m });
         Assert.False(service.BelowMinimum("pol", 0.001m));
-        service.Select(Usdc, Config(), "inv9", "pol");
         var status = await Settle(service, "inv9");
         Assert.Equal(IntentsState.Failed, status.State);
         Assert.Contains("larger orders", status.Error);
@@ -141,14 +145,13 @@ public class IntentsDepositServiceTests
     }
 
     [Fact]
-    public async Task RefusesNetworksItCannotRefundTo() =>
-        Assert.False(Create().Service.Select(Usdc, Config(), "inv2", "sol"));
+    public void RefusesNetworksItCannotRefundTo() =>
+        Assert.Equal(IntentsState.Failed, Get(Create().Service, "inv2", "sol", 0.001m).State);
 
     [Fact]
     public async Task RefusesAQuoteThatPaysLessThanDue()
     {
         var (service, _) = Create(new FakeOneClick(amountOutOverride: 99_000));
-        service.Select(Usdc, Config(), "inv3", "pol");
         Assert.Equal(IntentsState.Failed, (await Settle(service, "inv3")).State);
     }
 
@@ -156,8 +159,7 @@ public class IntentsDepositServiceTests
     public async Task AmbiguousTokensAreNotOffered()
     {
         var (service, fake) = Create();
-        service.Select(Usdc, Config(), "inv4", "eth");
-        Assert.Equal(IntentsState.Failed, (await Settle(service, "inv4")).State);
+        Assert.Equal(IntentsState.Failed, (await Settle(service, "inv4", network: "eth")).State);
         Assert.Empty(fake.Quotes);
     }
 
@@ -166,22 +168,41 @@ public class IntentsDepositServiceTests
     {
         var (service, fake) = Create();
         service.Now = () => DateTimeOffset.UtcNow;
-        service.Select(Usdc, Config(), "inv5", "pol");
         await Settle(service, "inv5");
+        // Opening another token checkout of the same invoice gets its own deposit and leaves this one alone.
+        await Settle(service, "inv5", network: "bsc");
         fake.Status = "PROCESSING";
         service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
         var status = await Settle(service, "inv5");
         Assert.Equal(IntentsState.Received, status.State);
-        // A deposit on its way is not dropped for another network.
-        Assert.False(service.Select(Usdc, Config(), "inv5", "bsc"));
+        Assert.Equal("0xdeposit1", status.Payment!.Address);
+    }
+
+    [Fact]
+    public async Task KeepsFollowingEarlierQuotesWithoutAnyoneOnTheCheckout()
+    {
+        var (service, fake) = Create();
+        service.Now = () => DateTimeOffset.UtcNow;
+        await Settle(service, "inv7");
+        // A partial payment changes what is due: a new quote, and the first one is still followed.
+        var second = await Settle(service, "inv7", btcDue: 0.0005m);
+        Assert.Equal("0xdeposit2", second.Payment!.Address);
+        fake.Status = "SUCCESS";
+        var statusCalls = fake.StatusCalls;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal(statusCalls + 2, fake.StatusCalls);
+        // Settled quotes are not asked again.
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(2);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal(statusCalls + 2, fake.StatusCalls);
     }
 
     [Fact]
     public async Task EighteenDecimalTokensRoundUp()
     {
         var (service, _) = Create();
-        service.Select(Usdc, Config(), "inv6", "bsc");
-        var status = await Settle(service, "inv6");
+        var status = await Settle(service, "inv6", network: "bsc");
         Assert.Equal(18, status.Payment!.Decimals);
         Assert.Equal(60.3m, status.Payment.Amount);
         Assert.Equal(new BigInteger(1), BigInteger.Parse("1"));
