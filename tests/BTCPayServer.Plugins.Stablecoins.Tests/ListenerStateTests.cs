@@ -41,4 +41,15 @@ public class ListenerStateTests
     {
         Assert.Equal(accounted, SwapToBtcListener.IsAccounted(new BroadcastResult { Success = success, RPCCode = code }));
     }
+
+    [Theory]
+    [InlineData(1, null, PaymentStatus.Unaccounted, true)] // mined: counts whatever the node says
+    [InlineData(0, false, PaymentStatus.Processing, false)] // replaced
+    [InlineData(0, true, PaymentStatus.Unaccounted, true)] // broadcastable again
+    [InlineData(0, null, PaymentStatus.Unaccounted, false)] // node unreachable: stays replaced
+    [InlineData(-1, null, PaymentStatus.Processing, true)] // node unreachable: keeps counting, as in BTCPay
+    public void KeepsTheCurrentStateWhenTheNodeCannotBeAsked(long confirmations, bool? broadcastable, PaymentStatus current, bool accounted)
+    {
+        Assert.Equal(accounted, SwapToBtcListener.IsAccounted(confirmations, broadcastable, current));
+    }
 }

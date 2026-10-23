@@ -202,7 +202,7 @@ public class SwapToBtcListener(
             var data = handler.ParsePaymentDetails(payment.Details);
             if (!transactions.TryGetValue(OutPoint.Parse(data.Outpoint).Hash, out var tx))
                 continue; // Unknown to NBXplorer right now; keep the current state.
-            var accounted = tx.Confirmations > 0 || await StillBroadcastable(tx);
+            var accounted = IsAccounted(tx.Confirmations, tx.Confirmations > 0 ? null : await StillBroadcastable(tx), payment.Status);
             // Logged once, when the payment stops counting. BTCPay skips -1 (already conflicted) here, but this listener has no other place that says why.
             if (!accounted && payment.Status != PaymentStatus.Unaccounted)
             {
@@ -226,9 +226,9 @@ public class SwapToBtcListener(
 
     /// <summary>
     /// Asks the node to broadcast an unconfirmed (0) or conflicted (-1) transaction again: it is refused when a
-    /// replacement or double spend won. If the node cannot be asked, the payment keeps counting, as in BTCPay.
+    /// replacement or double spend won. Null when the node cannot be asked.
     /// </summary>
-    async Task<bool> StillBroadcastable(TransactionResult tx)
+    async Task<bool?> StillBroadcastable(TransactionResult tx)
     {
         try
         {
@@ -238,9 +238,16 @@ public class SwapToBtcListener(
         }
         catch
         {
-            return true;
+            return null;
         }
     }
+
+    /// <summary>
+    /// Whether the payment counts. When the node cannot be asked, the payment keeps the state it had:
+    /// a payment already found replaced does not count again just because the node did not answer.
+    /// </summary>
+    public static bool IsAccounted(long confirmations, bool? broadcastable, PaymentStatus current) =>
+        confirmations > 0 || (broadcastable ?? current != PaymentStatus.Unaccounted);
 
     /// <summary>Same reading of the node's answer as BTCPay's own listener.</summary>
     public static bool IsAccounted(BroadcastResult result) =>
