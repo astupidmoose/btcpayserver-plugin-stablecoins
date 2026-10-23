@@ -203,7 +203,8 @@ public class SwapToBtcListener(
             if (!transactions.TryGetValue(OutPoint.Parse(data.Outpoint).Hash, out var tx))
                 continue; // Unknown to NBXplorer right now; keep the current state.
             var accounted = tx.Confirmations > 0 || await StillBroadcastable(tx);
-            if (!accounted && payment.Status != PaymentStatus.Unaccounted && tx.Confirmations != -1)
+            // Logged once, when the payment stops counting. BTCPay skips -1 (already conflicted) here, but this listener has no other place that says why.
+            if (!accounted && payment.Status != PaymentStatus.Unaccounted)
             {
                 var logs = new InvoiceLogs();
                 logs.Write($"The transaction {tx.TransactionHash} has been replaced.", InvoiceEventData.EventSeverity.Warning);
