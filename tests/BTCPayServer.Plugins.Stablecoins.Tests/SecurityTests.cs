@@ -62,6 +62,24 @@ public class SecurityTests
     }
 
     [Fact]
+    public async Task KeepsCheckingWhenTheInvoiceCannotBeRead()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx } };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        verifier.GetPaymentTxIds = _ => throw new InvalidOperationException("database unavailable");
+        verifier.Now = () => DateTimeOffset.UtcNow + SourceVerifier.GiveUpAfter + TimeSpan.FromMinutes(1);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Empty(logs);
+        Assert.Equal(1, verifier.PendingCount);
+
+        verifier.GetPaymentTxIds = _ => Task.FromResult(new HashSet<string> { InvoicePayoutTx });
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.StartsWith("LI.FI confirms", Assert.Single(logs));
+        Assert.Contains(InvoicePayoutTx, terms);
+    }
+
+    [Fact]
     public async Task WarnsWhenLifisBtcPayoutNeverReachesTheInvoice()
     {
         var (verifier, lifi, logs, terms) = Verifier();

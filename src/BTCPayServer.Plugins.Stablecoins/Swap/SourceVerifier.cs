@@ -119,7 +119,10 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
                 }
                 continue;
             }
-            var verdict = Judge(status, p.BtcAddress, await PaymentTxIds(p.InvoiceId));
+            // The invoice could not be read: try again later rather than judge without its payments.
+            if (await PaymentTxIds(p.InvoiceId) is not { } received)
+                continue;
+            var verdict = Judge(status, p.BtcAddress, received);
             if (verdict == Verdict.Wait && !expired)
                 continue;
             _pending.TryRemove(key, out _);
@@ -164,7 +167,8 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
         }
     }
 
-    async Task<HashSet<string>> PaymentTxIds(string invoiceId)
+    /// <summary>Null when the invoice could not be read.</summary>
+    async Task<HashSet<string>?> PaymentTxIds(string invoiceId)
     {
         try
         {
@@ -177,7 +181,7 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not read the payments of invoice {InvoiceId}", invoiceId);
-            return [];
+            return null;
         }
     }
 
