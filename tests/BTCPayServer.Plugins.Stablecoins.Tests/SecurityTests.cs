@@ -11,6 +11,9 @@ namespace BTCPayServer.Plugins.Stablecoins.Tests;
 public class SecurityTests
 {
     const string InvoiceAddress = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh";
+    const string InvoicePayoutTx = "9d3cf9b0000000000000000000000000000000000000000000000000000787b0";
+    // What LI.FI reports as toAddress for a Bitcoin destination.
+    const string LifiPlaceholder = "0x11f111f111f111f111f111f111f111f111f111f1";
 
     class FakeLifi : HttpMessageHandler
     {
@@ -33,9 +36,49 @@ public class SecurityTests
         var verifier = new SourceVerifier(new LifiStatusClient(new HttpClient(lifi)), null!, NullLogger<SourceVerifier>.Instance)
         {
             WriteLog = (_, message, _) => { logs.Add(message); return Task.CompletedTask; },
-            WriteSearchTerms = (_, t) => { terms.AddRange(t); return Task.CompletedTask; }
+            WriteSearchTerms = (_, t) => { terms.AddRange(t); return Task.CompletedTask; },
+            GetPaymentTxIds = _ => Task.FromResult(new HashSet<string> { InvoicePayoutTx })
         };
         return (verifier, lifi, logs, terms);
+    }
+
+    [Fact]
+    public async Task ConfirmsByTheBtcPayoutWhenLifiShowsAPlaceholderReceiver()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["fromAddress"] = "0xwallet", ["toAddress"] = LifiPlaceholder };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+        // In flight: no warning, still checked.
+        Assert.Empty(logs);
+        Assert.Equal(1, verifier.PendingCount);
+
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["fromAddress"] = "0xwallet", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = "0x" + InvoicePayoutTx.ToUpperInvariant() } };
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(0, verifier.PendingCount);
+        Assert.Single(logs);
+        Assert.StartsWith("LI.FI confirms", logs[0]);
+        Assert.Equal(new[] { "0xbase", "0xwallet", InvoicePayoutTx }, terms);
+    }
+
+    [Fact]
+    public async Task WarnsWhenLifisBtcPayoutNeverReachesTheInvoice()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = "otherbtctx" } };
+        lifi.Statuses["0xfailed"] = new JObject { ["status"] = "FAILED", ["substatus"] = "REFUNDED", ["toAddress"] = LifiPlaceholder };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        verifier.Enqueue("inv", "Base", "0xfailed", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Contains(logs, l => l.Contains("0xfailed") && l.Contains("FAILED (REFUNDED)"));
+        // The payout may still be on its way to the invoice: wait.
+        Assert.Equal(1, verifier.PendingCount);
+
+        verifier.Now = () => DateTimeOffset.UtcNow + SourceVerifier.GiveUpAfter + TimeSpan.FromMinutes(1);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Contains(logs, l => l.Contains("0xbase") && l.Contains("otherbtctx") && l.Contains("did not receive"));
+        Assert.DoesNotContain(logs, l => l.Contains("does not pay this invoice"));
+        Assert.Empty(terms);
     }
 
     [Fact]

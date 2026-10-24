@@ -11,7 +11,9 @@ using BTCPayServer.HostedServices;
 using BTCPayServer.Logging;
 using BTCPayServer.Payments;
 using BTCPayServer.Services;
+using BTCPayServer.Services.Apps;
 using BTCPayServer.Services.Invoices;
+using BTCPayServer.Services.PaymentRequests;
 using BTCPayServer.Services.Wallets;
 using Microsoft.Extensions.Logging;
 using NBitcoin;
@@ -37,6 +39,7 @@ public class SwapToBtcListener(
     BTCPayNetworkProvider networkProvider,
     BTCPayWalletProvider walletProvider,
     ExplorerClientProvider explorerClientProvider,
+    WalletRepository walletRepository,
     ILogger<SwapToBtcListener> logger) : EventHostedServiceBase(eventAggregator, logger)
 {
     BTCPayNetwork Network => networkProvider.BTC;
@@ -126,8 +129,28 @@ public class SwapToBtcListener(
             invoice.Id, amount, handler.Chain.Name, id);
         wallet.InvalidateCache(handler.Network.NBXplorerNetwork.DerivationStrategyFactory.Parse(
             handler.ParsePaymentPromptDetails(invoice.GetPaymentPrompt(pmi)!.Details).AccountDerivation!));
+        await LabelTransaction(invoice, outPoint.Hash);
         invoice = await invoiceRepository.GetInvoice(invoice.Id);
         EventAggregator.Publish(new InvoiceEvent(invoice, InvoiceEvent.ReceivedPayment) { Payment = payment });
+    }
+
+    /// <summary>
+    /// Tags the BTC transaction in the store's wallet with its invoice (and app or payment request), as BTCPay does
+    /// for its own on-chain payments: BTCPay's labeler only handles its own payment method.
+    /// </summary>
+    async Task LabelTransaction(InvoiceEntity invoice, uint256 txId)
+    {
+        try
+        {
+            var attachments = new List<Attachment> { Attachment.Invoice(invoice.Id) };
+            attachments.AddRange(PaymentRequestRepository.GetPaymentIdsFromInternalTags(invoice).Select(id => Attachment.PaymentRequest(id)));
+            attachments.AddRange(AppService.GetAppInternalTags(invoice).Select(Attachment.App));
+            await walletRepository.AddWalletTransactionAttachment(new WalletId(invoice.StoreId, Network.CryptoCode), txId, attachments);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not label the BTC transaction {TxId} of invoice {InvoiceId}", txId, invoice.Id);
+        }
     }
 
     /// <summary>

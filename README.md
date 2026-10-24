@@ -43,7 +43,7 @@ Payment method ids use underscores, not dashes: some store integrations send the
 
 For support, the invoice log records:
 
-- **Wallet payments:** what the customer's browser reports when they press pay (wallet address, token, amount) and each transaction they sign, marked "Customer-reported, unverified". The server then asks LI.FI about each transaction hash: once LI.FI confirms it pays this invoice's address, the log says so and the wallet address and transaction hashes are added to the invoice's search terms. A hash LI.FI says pays somewhere else is logged as a warning.
+- **Wallet payments:** what the customer's browser reports when they press pay (wallet address, token, amount) and each transaction they sign, marked "Customer-reported, unverified". The server then asks LI.FI about each transaction hash: once LI.FI's BTC payout for it is a transaction this invoice received, the log says so and the wallet address and transaction hashes are added to the invoice's search terms. A swap LI.FI reports as failed, or whose BTC never reaches the invoice, is logged as a warning.
 - **Exchange payments:** each NEAR Intents quote (deposit address, amount, deadline, refund address, quote id), its status changes, why a quote failed, the customer's deposit transaction and NEAR Intents' BTC payout transaction. Quotes are saved with the invoice and followed by the server until they settle, even after the customer closes the checkout or BTCPay restarts. The deposit address, quote id and transaction hashes are added to the search terms.
 
 Pasting whatever the customer sends you (their wallet, a transaction hash, the address they paid) into the Invoices search finds the invoice once the provider has confirmed it. Unverified reports are in the invoice log only.
@@ -75,7 +75,7 @@ dotnet build src/BTCPayServer.Plugins.Stablecoins/BTCPayServer.Plugins.Stablecoi
 dotnet test --project tests/BTCPayServer.Plugins.Stablecoins.Tests/BTCPayServer.Plugins.Stablecoins.Tests.csproj
 ```
 
-The panel bundles are committed. To rebuild them: `cd client && npm ci && npm run build`. Dependencies are pinned to exact versions, and the build stops if `npm audit` reports a high-severity issue in a runtime dependency.
+The panel bundles are committed. To rebuild them: `cd client && npm ci && npm run build`. Dependencies are pinned to exact versions, and the build stops if `npm audit` reports a high-severity issue in a runtime dependency, apart from the ones `client/audit.mjs` accepts with its reason.
 
 For local testing against a fake 1Click server, set `BTCPAY_STABLECOINS_ONECLICK_URL`.
 

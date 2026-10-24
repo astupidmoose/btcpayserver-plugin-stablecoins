@@ -258,7 +258,7 @@ function Panel({ opts, client, chain }) {
         <p className="text-muted small mb-0">
           {status === 'paying'
             ? 'Your wallet may ask you to approve the token first, then to send it.'
-            : 'Keep this page open. It updates by itself when the payment is received, which can take several minutes.'}
+            : 'It can take several minutes to arrive. You can close this page: your order completes on its own.'}
         </p>
       </div>
     );

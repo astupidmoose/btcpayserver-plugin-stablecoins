@@ -72,7 +72,7 @@
         <div v-else-if="d.state === 'received'" class="text-center">
             <p class="fw-semibold mb-1">{{ d.symbol }} payment received</p>
             <p class="text-muted small mb-0">
-                Keep this page open. It updates by itself once the payment is confirmed<span v-if="d.minutes">, usually within {{ d.minutes }} minutes</span>.
+                It is usually confirmed<span v-if="d.minutes"> within {{ d.minutes }} minutes</span><span v-else> within several minutes</span>. You can close this page: your order completes on its own.
             </p>
         </div>
         <div v-else-if="d.state === 'refunded'" class="alert alert-danger small mb-0" role="alert">

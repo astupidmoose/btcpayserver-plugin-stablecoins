@@ -17,7 +17,10 @@ namespace BTCPayServer.Plugins.Stablecoins.Swap;
 /// <summary>
 /// Checks the source transactions customers report with LI.FI before the invoice trusts them.
 /// A reported hash is only written as this swap's transaction, and only made searchable, once LI.FI
-/// confirms it pays this invoice's own BTC address. Anything else stays an unverified note.
+/// confirms it pays this invoice: its BTC payout is a transaction this invoice received, or it names
+/// this invoice's own BTC address. Anything else stays an unverified note.
+/// For Bitcoin destinations LI.FI's toAddress is often a placeholder (0x11f1...11f1), not the BTC address,
+/// so the payout transaction is what decides.
 /// </summary>
 public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepository, ILogger<SourceVerifier> logger) : BackgroundService
 {
@@ -36,6 +39,35 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     /// <summary>Where log lines and search terms go; replaced by tests.</summary>
     public Func<string, string, InvoiceEventData.EventSeverity, Task>? WriteLog { get; set; }
     public Func<string, List<string>, Task>? WriteSearchTerms { get; set; }
+    /// <summary>The BTC transaction ids this invoice has received; replaced by tests.</summary>
+    public Func<string, Task<HashSet<string>>>? GetPaymentTxIds { get; set; }
+
+    public enum Verdict { Wait, Confirmed, PaysElsewhere, Failed }
+
+    /// <summary>What a LI.FI status says about a reported transaction, given the BTC transactions the invoice received.</summary>
+    public static Verdict Judge(LifiTransferStatus status, string btcAddress, ISet<string> paymentTxIds)
+    {
+        if (string.Equals(status.ToAddress, btcAddress, StringComparison.OrdinalIgnoreCase))
+            return Verdict.Confirmed;
+        if (Normalize(status.Receiving?.TxHash) is { } payout && paymentTxIds.Contains(payout))
+            return Verdict.Confirmed;
+        // A real BTC address that is not this invoice's. An EVM-shaped one is LI.FI's placeholder for a non-EVM receiver.
+        if (status.ToAddress is { Length: > 0 } to && !to.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            return Verdict.PaysElsewhere;
+        if (status.Status is "FAILED" or "INVALID")
+            return Verdict.Failed;
+        // Pending, or done but the BTC has not reached this invoice yet.
+        return Verdict.Wait;
+    }
+
+    /// <summary>A BTC transaction id as BTCPay writes it: lower case, no 0x.</summary>
+    public static string? Normalize(string? txHash)
+    {
+        if (string.IsNullOrWhiteSpace(txHash))
+            return null;
+        var h = txHash.Trim().ToLowerInvariant();
+        return h.StartsWith("0x", StringComparison.Ordinal) ? h[2..] : h;
+    }
 
     /// <summary>False when the hash is already being checked or the queue is full.</summary>
     public bool Enqueue(string invoiceId, string chainName, string txHash, string btcAddress)
@@ -75,9 +107,10 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
                 logger.LogDebug(ex, "LI.FI status of {TxHash} failed", p.TxHash);
                 status = null;
             }
+            var expired = Now() - p.Since > GiveUpAfter;
             if (status is null)
             {
-                if (Now() - p.Since > GiveUpAfter)
+                if (expired)
                 {
                     _pending.TryRemove(key, out _);
                     await Log(p.InvoiceId, $"LI.FI never saw the {p.ChainName} transaction the customer reported ({p.TxHash}). It is not this swap's transaction.",
@@ -85,19 +118,39 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
                 }
                 continue;
             }
+            var verdict = Judge(status, p.BtcAddress, await PaymentTxIds(p.InvoiceId));
+            if (verdict == Verdict.Wait && !expired)
+                continue;
             _pending.TryRemove(key, out _);
-            if (!string.Equals(status.ToAddress, p.BtcAddress, StringComparison.OrdinalIgnoreCase))
+            if (verdict == Verdict.PaysElsewhere)
             {
-                await Log(p.InvoiceId, $"The {p.ChainName} transaction the customer reported ({p.TxHash}) does not pay this invoice: LI.FI shows it paying {status.ToAddress ?? "another address"}.",
+                await Log(p.InvoiceId, $"The {p.ChainName} transaction the customer reported ({p.TxHash}) does not pay this invoice: LI.FI shows it paying {status.ToAddress}.",
                     InvoiceEventData.EventSeverity.Warning);
+                continue;
+            }
+            if (verdict == Verdict.Failed)
+            {
+                await Log(p.InvoiceId, $"LI.FI reports the swap of the {p.ChainName} transaction the customer reported ({p.TxHash}) as {status.Status}" +
+                                       (status.Substatus is { Length: > 0 } sub ? $" ({sub})" : "") + $". Details at https://scan.li.fi/tx/{p.TxHash}",
+                    InvoiceEventData.EventSeverity.Warning);
+                continue;
+            }
+            if (verdict == Verdict.Wait)
+            {
+                await Log(p.InvoiceId, $"Could not confirm that the {p.ChainName} transaction the customer reported ({p.TxHash}) pays this invoice: " +
+                                       (status.Receiving?.TxHash is { Length: > 0 } btc
+                                           ? $"LI.FI paid BTC in {btc}, which this invoice did not receive."
+                                           : $"LI.FI still shows it as {status.Status}.") +
+                                       $" Details at https://scan.li.fi/tx/{p.TxHash}", InvoiceEventData.EventSeverity.Warning);
                 continue;
             }
             await Log(p.InvoiceId, $"LI.FI confirms the customer's {p.ChainName} transaction {p.TxHash} pays this invoice" +
                                    (status.FromAddress is { Length: > 0 } from ? $", from wallet {from}" : "") +
-                                   $" (status {status.Status}). Track it at https://scan.li.fi/tx/{p.TxHash}", InvoiceEventData.EventSeverity.Info);
+                                   (status.Receiving?.TxHash is { Length: > 0 } paid ? $", with BTC transaction {Normalize(paid)}" : "") +
+                                   $". Track it at https://scan.li.fi/tx/{p.TxHash}", InvoiceEventData.EventSeverity.Info);
             var terms = new List<string> { p.TxHash };
             if (!string.IsNullOrEmpty(status.FromAddress)) terms.Add(status.FromAddress);
-            if (!string.IsNullOrEmpty(status.Receiving?.TxHash)) terms.Add(status.Receiving.TxHash);
+            if (Normalize(status.Receiving?.TxHash) is { } payout) terms.Add(payout);
             try
             {
                 var distinct = terms.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -107,6 +160,23 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             {
                 logger.LogWarning(ex, "Could not add search terms to invoice {InvoiceId}", p.InvoiceId);
             }
+        }
+    }
+
+    async Task<HashSet<string>> PaymentTxIds(string invoiceId)
+    {
+        try
+        {
+            if (GetPaymentTxIds is not null)
+                return await GetPaymentTxIds(invoiceId);
+            var invoice = await invoiceRepository.GetInvoice(invoiceId);
+            // Payment ids of on-chain payments are outpoints: txid-index.
+            return invoice?.GetPayments(false).Select(p => Normalize(p.Id.Split('-')[0])!).ToHashSet() ?? [];
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not read the payments of invoice {InvoiceId}", invoiceId);
+            return [];
         }
     }
 
