@@ -102,6 +102,7 @@ public class SwapToBtcListener(
         var id = outPoint.ToString();
         if (invoice.GetPayments(false).Any(p => p.Id == id && p.PaymentMethodId == pmi))
         {
+            await LabelTransaction(invoice, outPoint.Hash);
             await RefreshConfirmations(wallet, invoice, handler);
             return;
         }
@@ -244,6 +245,9 @@ public class SwapToBtcListener(
         if (changed.Count == 0)
             return;
         await paymentService.UpdatePayments(changed);
+        // Labeling is idempotent: redoing it as confirmations change repairs a label that failed when the payment arrived.
+        foreach (var hash in changed.Select(p => OutPoint.Parse(handler.ParsePaymentDetails(p.Details).Outpoint).Hash).Distinct())
+            await LabelTransaction(invoice, hash);
         EventAggregator.Publish(new InvoiceNeedUpdateEvent(invoice.Id));
     }
 
