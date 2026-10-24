@@ -8,12 +8,14 @@ using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
 using BTCPayServer.Events;
 using BTCPayServer.HostedServices;
+using BTCPayServer.Logging;
 using BTCPayServer.Payments;
 using BTCPayServer.Services;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Wallets;
 using Microsoft.Extensions.Logging;
 using NBitcoin;
+using NBitcoin.RPC;
 using NBXplorer.DerivationStrategy;
 using NBXplorer.Models;
 using Newtonsoft.Json.Linq;
@@ -180,10 +182,15 @@ public class SwapToBtcListener(
         }
     }
 
+    /// <summary>
+    /// Brings every payment of the invoice up to date, settled ones included, the way BTCPay's own on-chain
+    /// listener does: confirmations can drop in a reorganization, and an unconfirmed transaction can be
+    /// replaced (RBF) or double spent. A transaction that can no longer be broadcast stops counting.
+    /// </summary>
     async Task RefreshConfirmations(BTCPayWallet wallet, InvoiceEntity invoice, SwapToBtcPaymentMethodHandler handler)
     {
         var payments = invoice.GetPayments(false)
-            .Where(p => p.PaymentMethodId == handler.PaymentMethodId && p.Status == PaymentStatus.Processing)
+            .Where(p => p.PaymentMethodId == handler.PaymentMethodId)
             .ToList();
         if (payments.Count == 0)
             return;
@@ -195,8 +202,15 @@ public class SwapToBtcListener(
             var data = handler.ParsePaymentDetails(payment.Details);
             if (!transactions.TryGetValue(OutPoint.Parse(data.Outpoint).Hash, out var tx))
                 continue; // Unknown to NBXplorer right now; keep the current state.
-            var confirmations = Math.Min(Math.Max(0, tx.Confirmations), Network.MaxTrackedConfirmation);
-            var status = GetStatus(invoice.SpeedPolicy, new SwapToBtcPaymentData { ConfirmationCount = confirmations, RBF = data.RBF });
+            var accounted = IsAccounted(tx.Confirmations, tx.Confirmations > 0 ? null : await StillBroadcastable(tx), payment.Status);
+            // Logged once, when the payment stops counting. BTCPay skips -1 (already conflicted) here, but this listener has no other place that says why.
+            if (!accounted && payment.Status != PaymentStatus.Unaccounted)
+            {
+                var logs = new InvoiceLogs();
+                logs.Write($"The transaction {tx.TransactionHash} has been replaced.", InvoiceEventData.EventSeverity.Warning);
+                await invoiceRepository.AddInvoiceLogs(invoice.Id, logs);
+            }
+            var (confirmations, status) = NextState(invoice.SpeedPolicy, data.RBF, tx.Confirmations, accounted, Network.MaxTrackedConfirmation);
             if (confirmations == data.ConfirmationCount && status == payment.Status)
                 continue;
             data.ConfirmationCount = confirmations;
@@ -208,6 +222,50 @@ public class SwapToBtcListener(
             return;
         await paymentService.UpdatePayments(changed);
         EventAggregator.Publish(new InvoiceNeedUpdateEvent(invoice.Id));
+    }
+
+    /// <summary>
+    /// Asks the node to broadcast an unconfirmed (0) or conflicted (-1) transaction again: it is refused when a
+    /// replacement or double spend won. Null when the node cannot be asked.
+    /// </summary>
+    async Task<bool?> StillBroadcastable(TransactionResult tx)
+    {
+        try
+        {
+            var result = await explorerClientProvider.GetExplorerClient(Network)
+                .BroadcastAsync(tx.Transaction, testMempoolAccept: tx.Confirmations == -1);
+            return IsAccounted(result);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether the payment counts. When the node cannot be asked, the payment keeps the state it had:
+    /// a payment already found replaced does not count again just because the node did not answer.
+    /// </summary>
+    public static bool IsAccounted(long confirmations, bool? broadcastable, PaymentStatus current) =>
+        confirmations > 0 || (broadcastable ?? current != PaymentStatus.Unaccounted);
+
+    /// <summary>Same reading of the node's answer as BTCPay's own listener.</summary>
+    public static bool IsAccounted(BroadcastResult result) =>
+        result.Success ||
+        result.RPCCode == RPCErrorCode.RPC_TRANSACTION_ALREADY_IN_CHAIN ||
+        !(result.RPCCode == RPCErrorCode.RPC_TRANSACTION_ERROR ||
+          result.RPCCode == RPCErrorCode.RPC_TRANSACTION_REJECTED);
+
+    /// <summary>
+    /// The payment's confirmation count and status from what the node reports now. Confirmations can go down
+    /// (a reorganization), which takes a settled payment back to processing.
+    /// </summary>
+    public static (int Confirmations, PaymentStatus Status) NextState(SpeedPolicy speedPolicy, bool rbf, long nodeConfirmations, bool accounted, int maxTracked)
+    {
+        var confirmations = (int)Math.Min(nodeConfirmations, maxTracked);
+        if (!accounted)
+            return (confirmations, PaymentStatus.Unaccounted);
+        return (confirmations, GetStatus(speedPolicy, new SwapToBtcPaymentData { ConfirmationCount = confirmations, RBF = rbf }));
     }
 
     /// <summary>Same confirmation rules as BTCPay's own on-chain payments.</summary>
