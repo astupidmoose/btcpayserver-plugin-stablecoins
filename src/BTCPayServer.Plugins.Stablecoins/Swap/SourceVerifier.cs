@@ -27,7 +27,10 @@ namespace BTCPayServer.Plugins.Stablecoins.Swap;
 public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepository, ILogger<SourceVerifier> logger) : BackgroundService
 {
     public static readonly TimeSpan GiveUpAfter = TimeSpan.FromHours(2);
-    /// <summary>While LI.FI cannot be reached a check is kept past <see cref="GiveUpAfter"/>, up to this long.</summary>
+    /// <summary>
+    /// While LI.FI cannot be reached or cannot answer, or still shows the swap in progress, a check is kept past
+    /// <see cref="GiveUpAfter"/>, up to this long.
+    /// </summary>
     public static readonly TimeSpan GiveUpUnreachableAfter = TimeSpan.FromDays(1);
     public static readonly TimeSpan CheckEvery = TimeSpan.FromSeconds(30);
     /// <summary>Pending checks are bounded: beyond this, new reports are dropped (they are still in the log as unverified).</summary>
@@ -67,10 +70,12 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             paymentTxIds.Contains(PayoutSats(status) is { } sats ? $"{payout}:{sats}" : payout))
             return Verdict.Confirmed;
         // A refund ends as DONE with substatus REFUNDED and may still name the invoice address.
-        if (status.Status is "FAILED" or "INVALID" || status.Substatus == "REFUNDED")
+        if (status.Status == "FAILED" || status.Substatus == "REFUNDED")
             return Verdict.Failed;
+        // The intended address proves nothing until the swap completed: a pending one can still fail, and a PARTIAL
+        // one delivered another token instead of BTC.
         if (string.Equals(status.ToAddress, btcAddress, StringComparison.OrdinalIgnoreCase))
-            return Verdict.Confirmed;
+            return status.Status == "DONE" && status.Substatus is null or "" or "COMPLETED" ? Verdict.Confirmed : Verdict.Wait;
         // A real BTC address that is not this invoice's. An EVM-shaped one is LI.FI's placeholder for a non-EVM receiver.
         if (status.ToAddress is { Length: > 0 } to && !to.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
             return Verdict.PaysElsewhere;
@@ -222,20 +227,19 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
-                // Not an answer: keep checking, so an outage past the deadline does not discard a real swap.
                 logger.LogDebug(ex, "LI.FI status of {TxHash} failed", p.TxHash);
-                if (Now() - p.Since > GiveUpUnreachableAfter)
-                {
-                    await Done(key, p);
-                    await Log(p.InvoiceId, $"Could not reach LI.FI to check the {p.ChainName} transaction the customer reported ({p.TxHash}). Details at https://scan.li.fi/tx/{p.TxHash}",
-                        InvoiceEventData.EventSeverity.Warning);
-                }
+                await Unanswered(key, p);
                 continue;
             }
-            var expired = Now() - p.Since > GiveUpAfter;
+            // INVALID means a service LI.FI relies on is down, not that the swap failed.
+            if (status?.Status == "INVALID")
+            {
+                await Unanswered(key, p);
+                continue;
+            }
             if (status is null)
             {
-                if (expired)
+                if (Now() - p.Since > GiveUpAfter)
                 {
                     await Done(key, p);
                     await Log(p.InvoiceId, $"LI.FI never saw the {p.ChainName} transaction the customer reported ({p.TxHash}). It is not this swap's transaction.",
@@ -247,6 +251,8 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             if (await PaymentTxIds(p.InvoiceId) is not { } received)
                 continue;
             var verdict = Judge(status, p.BtcAddress, received);
+            // A slow bridge must not lose a swap LI.FI still shows in progress.
+            var expired = Now() - p.Since > (status.Status == "PENDING" ? GiveUpUnreachableAfter : GiveUpAfter);
             if (verdict == Verdict.Wait && !expired)
                 continue;
             // A confirmed check stays pending, and saved, until its search terms are written.
@@ -286,6 +292,16 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
                                    (status.Receiving?.TxHash is { Length: > 0 } paid ? $", with BTC transaction {Normalize(paid)}" : "") +
                                    $". Track it at https://scan.li.fi/tx/{p.TxHash}", InvoiceEventData.EventSeverity.Info);
         }
+    }
+
+    /// <summary>Not an answer: keep checking, so an outage past the deadline does not discard a real swap.</summary>
+    async Task Unanswered(string key, Pending p)
+    {
+        if (Now() - p.Since <= GiveUpUnreachableAfter)
+            return;
+        await Done(key, p);
+        await Log(p.InvoiceId, $"Could not get an answer from LI.FI about the {p.ChainName} transaction the customer reported ({p.TxHash}). Details at https://scan.li.fi/tx/{p.TxHash}",
+            InvoiceEventData.EventSeverity.Warning);
     }
 
     async Task<bool> AddSearchTerms(string invoiceId, List<string> terms)

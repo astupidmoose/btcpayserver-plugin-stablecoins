@@ -107,7 +107,75 @@ public class SecurityTests
         now += SourceVerifier.GiveUpUnreachableAfter;
         await lifi.CheckAll(CancellationToken.None);
         Assert.Equal(0, lifi.PendingCount);
-        Assert.Contains(logs, l => l.StartsWith("Could not reach LI.FI"));
+        Assert.Contains(logs, l => l.StartsWith("Could not get an answer from LI.FI"));
+    }
+
+    [Fact]
+    public async Task RetriesAnInvalidStatusInsteadOfFailingTheSwap()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        var now = DateTimeOffset.UtcNow;
+        verifier.Now = () => now;
+        // INVALID: a third-party service LI.FI relies on is down. It says nothing about the swap.
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "INVALID" };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        now += SourceVerifier.GiveUpAfter + TimeSpan.FromMinutes(1);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(1, verifier.PendingCount);
+        Assert.Empty(logs);
+
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx } };
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(0, verifier.PendingCount);
+        Assert.StartsWith("LI.FI confirms", Assert.Single(logs));
+        Assert.Contains("0xbase", terms);
+    }
+
+    [Fact]
+    public async Task APendingSwapIsNotConfirmedByItsAddress()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        verifier.GetPaymentTxIds = _ => Task.FromResult(new HashSet<string>());
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["toAddress"] = InvoiceAddress };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(1, verifier.PendingCount);
+        Assert.Empty(terms);
+
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "FAILED", ["toAddress"] = InvoiceAddress };
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(0, verifier.PendingCount);
+        Assert.Empty(terms);
+        Assert.Contains(logs, l => l.Contains("as FAILED"));
+    }
+
+    [Fact]
+    public void OnlyACompletedSwapIsConfirmedByItsAddress()
+    {
+        var none = new HashSet<string>();
+        Assert.Equal(SourceVerifier.Verdict.Confirmed, SourceVerifier.Judge(new LifiTransferStatus { Status = "DONE", Substatus = "COMPLETED", ToAddress = InvoiceAddress }, InvoiceAddress, none));
+        Assert.Equal(SourceVerifier.Verdict.Confirmed, SourceVerifier.Judge(new LifiTransferStatus { Status = "DONE", ToAddress = InvoiceAddress }, InvoiceAddress, none));
+        // PARTIAL: the customer got another token instead of BTC.
+        Assert.Equal(SourceVerifier.Verdict.Wait, SourceVerifier.Judge(new LifiTransferStatus { Status = "DONE", Substatus = "PARTIAL", ToAddress = InvoiceAddress }, InvoiceAddress, none));
+        Assert.Equal(SourceVerifier.Verdict.Wait, SourceVerifier.Judge(new LifiTransferStatus { Status = "PENDING", ToAddress = InvoiceAddress }, InvoiceAddress, none));
+    }
+
+    [Fact]
+    public async Task KeepsCheckingASwapLifiStillShowsInProgress()
+    {
+        var (verifier, lifi, logs, _) = Verifier();
+        var now = DateTimeOffset.UtcNow;
+        verifier.Now = () => now;
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["toAddress"] = LifiPlaceholder };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        now += SourceVerifier.GiveUpAfter + TimeSpan.FromMinutes(1);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(1, verifier.PendingCount);
+        Assert.Empty(logs);
+        now += SourceVerifier.GiveUpUnreachableAfter;
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(0, verifier.PendingCount);
+        Assert.Contains(logs, l => l.Contains("still shows it as PENDING"));
     }
 
     class Unreachable : HttpMessageHandler
