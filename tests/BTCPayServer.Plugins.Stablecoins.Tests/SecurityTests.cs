@@ -62,6 +62,27 @@ public class SecurityTests
     }
 
     [Fact]
+    public async Task SavesReportedTransactionsAgainAfterAFailedWrite()
+    {
+        var (verifier, lifi, _, _) = Verifier();
+        var saved = new List<List<ReportedSource>>();
+        var fail = true;
+        verifier.WriteReports = (_, _, reports) =>
+        {
+            if (fail) { fail = false; throw new InvalidOperationException("database unavailable"); }
+            saved.Add(reports);
+            return Task.CompletedTask;
+        };
+        var pmi = SwapSourceChain.PaymentMethods.First(c => c.Provider == SwapProvider.Lifi).PaymentMethodId;
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["toAddress"] = LifiPlaceholder };
+
+        await verifier.Report("inv", pmi, "Base", "0xbase", InvoiceAddress);
+        Assert.Empty(saved);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal("0xbase", Assert.Single(Assert.Single(saved)).TxHash);
+    }
+
+    [Fact]
     public void ReportedTransactionsReadBackWithBtcpaysSerializer()
     {
         var serializer = BlobSerializer.CreateSerializer().Serializer;

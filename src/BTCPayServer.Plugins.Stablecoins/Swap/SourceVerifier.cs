@@ -37,6 +37,8 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     static readonly Newtonsoft.Json.JsonSerializer DetailsSerializer = BlobSerializer.CreateSerializer().Serializer;
 
     readonly ConcurrentDictionary<string, Pending> _pending = new();
+    /// <summary>Invoices whose open checks could not be saved; saved again on the next round.</summary>
+    readonly ConcurrentDictionary<(string InvoiceId, PaymentMethodId PaymentMethodId), byte> _unsaved = new();
     public Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.UtcNow;
 
     public int PendingCount => _pending.Count;
@@ -129,6 +131,7 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     /// <summary>Writes the invoice's open checks for this payment method into its prompt details.</summary>
     async Task Save(string invoiceId, PaymentMethodId paymentMethodId)
     {
+        _unsaved.TryRemove((invoiceId, paymentMethodId), out _);
         var gate = PromptDetailsGate.For(invoiceId);
         await gate.WaitAsync();
         try
@@ -149,7 +152,8 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not save the reported transaction checks of invoice {InvoiceId}", invoiceId);
+            _unsaved.TryAdd((invoiceId, paymentMethodId), 0);
+            logger.LogWarning(ex, "Could not save the reported transaction checks of invoice {InvoiceId}; trying again shortly", invoiceId);
         }
         finally
         {
@@ -183,6 +187,8 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
 
     public async Task CheckAll(CancellationToken cancellationToken)
     {
+        foreach (var (invoiceId, pmi) in _unsaved.Keys.ToArray())
+            await Save(invoiceId, pmi);
         foreach (var (key, p) in _pending.ToArray())
         {
             LifiTransferStatus? status;

@@ -527,8 +527,8 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
             lock (entry)
                 done = now - entry.Touched > ForgetAfter &&
                        entry.Quotes.All(q => q.Final || q.Payment.Deadline is { } d && now > d + FollowAfterDeadline);
-            if (done && _entries.TryRemove(key, out _))
-                PromptDetailsGate.Forget(entry.InvoiceId);
+            if (done)
+                _entries.TryRemove(key, out _);
         }
     }
 }
