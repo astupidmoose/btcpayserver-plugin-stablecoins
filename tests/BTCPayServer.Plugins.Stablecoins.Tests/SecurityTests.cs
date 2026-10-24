@@ -69,6 +69,54 @@ public class SecurityTests
     }
 
     [Fact]
+    public async Task WritesSearchTermsAgainAfterAFailedWrite()
+    {
+        var (verifier, lifi, _, _) = Verifier();
+        var terms = new List<string>();
+        var fail = true;
+        verifier.WriteSearchTerms = (_, t) =>
+        {
+            if (fail) { fail = false; throw new InvalidOperationException("database unavailable"); }
+            terms.AddRange(t);
+            return Task.CompletedTask;
+        };
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx } };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Empty(terms);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Contains("0xbase", terms);
+    }
+
+    [Fact]
+    public async Task KeepsCheckingPastTheDeadlineWhileLifiIsUnreachable()
+    {
+        var (verifier, _, logs, _) = Verifier();
+        var lifi = new SourceVerifier(new LifiStatusClient(new HttpClient(new Unreachable())), null!, NullLogger<SourceVerifier>.Instance)
+        {
+            WriteLog = (_, message, _) => { logs.Add(message); return Task.CompletedTask; },
+            GetPaymentTxIds = _ => Task.FromResult(new HashSet<string>())
+        };
+        var now = DateTimeOffset.UtcNow;
+        lifi.Now = () => now;
+        lifi.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        now += SourceVerifier.GiveUpAfter + TimeSpan.FromMinutes(1);
+        await lifi.CheckAll(CancellationToken.None);
+        Assert.Equal(1, lifi.PendingCount);
+        Assert.Empty(logs);
+        now += SourceVerifier.GiveUpUnreachableAfter;
+        await lifi.CheckAll(CancellationToken.None);
+        Assert.Equal(0, lifi.PendingCount);
+        Assert.Contains(logs, l => l.StartsWith("Could not reach LI.FI"));
+    }
+
+    class Unreachable : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+    }
+
+    [Fact]
     public async Task KeepsReportedTransactionsOnTheInvoiceUntilDecided()
     {
         var (verifier, lifi, _, _) = Verifier();

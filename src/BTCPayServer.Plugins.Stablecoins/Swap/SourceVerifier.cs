@@ -27,6 +27,8 @@ namespace BTCPayServer.Plugins.Stablecoins.Swap;
 public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepository, ILogger<SourceVerifier> logger) : BackgroundService
 {
     public static readonly TimeSpan GiveUpAfter = TimeSpan.FromHours(2);
+    /// <summary>While LI.FI cannot be reached a check is kept past <see cref="GiveUpAfter"/>, up to this long.</summary>
+    public static readonly TimeSpan GiveUpUnreachableAfter = TimeSpan.FromDays(1);
     public static readonly TimeSpan CheckEvery = TimeSpan.FromSeconds(30);
     /// <summary>Pending checks are bounded: beyond this, new reports are dropped (they are still in the log as unverified).</summary>
     public const int MaxPending = 2000;
@@ -39,6 +41,8 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     readonly ConcurrentDictionary<string, Pending> _pending = new();
     /// <summary>Invoices whose open checks could not be saved; saved again on the next round.</summary>
     readonly ConcurrentDictionary<(string InvoiceId, PaymentMethodId PaymentMethodId), byte> _unsaved = new();
+    /// <summary>Search terms of confirmed swaps that could not be written yet; written again on the next round.</summary>
+    readonly ConcurrentQueue<(string InvoiceId, List<string> Terms)> _unsearchable = new();
     public Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.UtcNow;
 
     public int PendingCount => _pending.Count;
@@ -211,6 +215,8 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             await Restore(cancellationToken);
         foreach (var (invoiceId, pmi) in _unsaved.Keys.ToArray())
             await Save(invoiceId, pmi);
+        for (var n = _unsearchable.Count; n > 0 && _unsearchable.TryDequeue(out var t); n--)
+            await AddSearchTerms(t.InvoiceId, t.Terms);
         foreach (var (key, p) in _pending.ToArray())
         {
             LifiTransferStatus? status;
@@ -220,8 +226,15 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
+                // Not an answer: keep checking, so an outage past the deadline does not discard a real swap.
                 logger.LogDebug(ex, "LI.FI status of {TxHash} failed", p.TxHash);
-                status = null;
+                if (Now() - p.Since > GiveUpUnreachableAfter)
+                {
+                    await Done(key, p);
+                    await Log(p.InvoiceId, $"Could not reach LI.FI to check the {p.ChainName} transaction the customer reported ({p.TxHash}). Details at https://scan.li.fi/tx/{p.TxHash}",
+                        InvoiceEventData.EventSeverity.Warning);
+                }
+                continue;
             }
             var expired = Now() - p.Since > GiveUpAfter;
             if (status is null)
@@ -270,15 +283,20 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             var terms = new List<string> { p.TxHash };
             if (!string.IsNullOrEmpty(status.FromAddress)) terms.Add(status.FromAddress);
             if (Normalize(status.Receiving?.TxHash) is { } payout) terms.Add(payout);
-            try
-            {
-                var distinct = terms.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                await (WriteSearchTerms?.Invoke(p.InvoiceId, distinct) ?? invoiceRepository.AddSearchTerms(p.InvoiceId, distinct));
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Could not add search terms to invoice {InvoiceId}", p.InvoiceId);
-            }
+            await AddSearchTerms(p.InvoiceId, terms.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+        }
+    }
+
+    async Task AddSearchTerms(string invoiceId, List<string> terms)
+    {
+        try
+        {
+            await (WriteSearchTerms?.Invoke(invoiceId, terms) ?? invoiceRepository.AddSearchTerms(invoiceId, terms));
+        }
+        catch (Exception ex)
+        {
+            _unsearchable.Enqueue((invoiceId, terms));
+            logger.LogWarning(ex, "Could not add search terms to invoice {InvoiceId}; trying again shortly", invoiceId);
         }
     }
 
