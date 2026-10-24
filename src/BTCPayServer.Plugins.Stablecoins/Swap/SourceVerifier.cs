@@ -97,10 +97,17 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             await Save(invoiceId, paymentMethodId);
     }
 
-    /// <summary>Picks up the checks saved on invoices BTCPay still monitors (after a restart or an update).</summary>
+    /// <summary>Payment methods whose saved checks are still to be picked up; null before the first restore.</summary>
+    HashSet<PaymentMethodId>? _toRestore;
+
+    /// <summary>
+    /// Picks up the checks saved on invoices BTCPay still monitors (after a restart or an update).
+    /// A payment method whose invoices could not be listed is tried again on the next round.
+    /// </summary>
     public async Task Restore(CancellationToken cancellationToken)
     {
-        foreach (var chain in SwapSourceChain.PaymentMethods.Where(c => c.Provider == SwapProvider.Lifi))
+        _toRestore ??= SwapSourceChain.PaymentMethods.Where(c => c.Provider == SwapProvider.Lifi).Select(c => c.PaymentMethodId).ToHashSet();
+        foreach (var chain in SwapSourceChain.PaymentMethods.Where(c => _toRestore.Contains(c.PaymentMethodId)))
         {
             InvoiceEntity[] invoices;
             try
@@ -119,6 +126,7 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
                 foreach (var r in details.ToObject<SwapToBtcPromptDetails>(DetailsSerializer)?.ReportedSources ?? [])
                     Enqueue(invoice.Id, chain.Name, r.TxHash, btcAddress, chain.PaymentMethodId, r.Since);
             }
+            _toRestore.Remove(chain.PaymentMethodId);
         }
     }
 
@@ -187,6 +195,8 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
 
     public async Task CheckAll(CancellationToken cancellationToken)
     {
+        if (_toRestore is { Count: > 0 })
+            await Restore(cancellationToken);
         foreach (var (invoiceId, pmi) in _unsaved.Keys.ToArray())
             await Save(invoiceId, pmi);
         foreach (var (key, p) in _pending.ToArray())

@@ -116,7 +116,7 @@ function Panel({ opts, client, chain }) {
   const [choosing, setChoosing] = useState(false);
   const [quote, setQuote] = useState(null);
   const [quoteError, setQuoteError] = useState(null);
-  const [status, setStatus] = useState('idle'); // idle | paying | more | sent | failed
+  const [status, setStatus] = useState('idle'); // idle | paying | more | sent | partial | failed
   const [payError, setPayError] = useState(null);
   const quoteSeq = useRef(0);
   const [usdRate, setUsdRate] = useState(null);
@@ -201,12 +201,14 @@ function Panel({ opts, client, chain }) {
     setStatus('paying'); setPayError(null);
     const requested = BigInt(toSats(opts.btcDue));
     const seen = new Set();
+    let last = null;
     try {
       opts.onEvent('started', quote);
       await executeRoute(client, convertQuoteToRoute(quote), {
         acceptExchangeRateUpdateHook: async ({ newToAmount }) =>
           BigInt(newToAmount) * 100n >= requested * BigInt(Math.round(MIN_ACCEPTED_OUTPUT * 100)),
         updateRouteHook: (route) => {
+          last = route;
           for (const step of route.steps) {
             for (const action of step.execution?.actions || []) {
               if (!action.txHash || seen.has(action.txHash)) continue;
@@ -222,8 +224,10 @@ function Panel({ opts, client, chain }) {
       setStatus('sent');
       opts.onEvent('completed', quote);
     } catch (e) {
-      // Once a transaction is signed the BTC is on its way even if tracking fails.
-      if (seen.size > 0) { setStatus('sent'); return; }
+      // Once every step is signed the BTC is on its way even if tracking fails.
+      if (seen.size > 0 && last?.steps.every(signed)) { setStatus('sent'); return; }
+      // Part of a multi-step payment went out: paying again would pay twice.
+      if (seen.size > 0) { setStatus('partial'); opts.onEvent('failed', e); return; }
       setStatus('failed');
       setPayError(errorText(e));
       opts.onEvent('failed', e);
@@ -250,6 +254,17 @@ function Panel({ opts, client, chain }) {
           </button>
         )}
         {qrError && <div className="text-danger small text-center">{qrError}</div>}
+      </div>
+    );
+  }
+
+  if (status === 'partial') {
+    return (
+      <div className="text-center">
+        <p className="mb-1 fw-semibold">Payment not finished</p>
+        <p className="text-muted small mb-0">
+          Part of this payment was sent, but your wallet did not send the rest. Do not pay again: contact the store with this invoice so they can help.
+        </p>
       </div>
     );
   }
