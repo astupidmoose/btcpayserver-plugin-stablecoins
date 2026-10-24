@@ -66,7 +66,8 @@ public class SecurityTests
     {
         var (verifier, lifi, logs, terms) = Verifier();
         lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = "otherbtctx" } };
-        lifi.Statuses["0xfailed"] = new JObject { ["status"] = "FAILED", ["substatus"] = "REFUNDED", ["toAddress"] = LifiPlaceholder };
+        // LI.FI may keep the intended BTC address on a failed swap: still a failure.
+        lifi.Statuses["0xfailed"] = new JObject { ["status"] = "FAILED", ["substatus"] = "REFUNDED", ["toAddress"] = InvoiceAddress };
         verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
         verifier.Enqueue("inv", "Base", "0xfailed", InvoiceAddress);
         await verifier.CheckAll(CancellationToken.None);

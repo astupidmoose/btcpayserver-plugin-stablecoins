@@ -14,7 +14,18 @@ try {
 } catch (e) {
   report = e.stdout; // npm audit exits non-zero when it finds anything
 }
-const advisories = Object.values(JSON.parse(report).vulnerabilities ?? {})
+let parsed;
+try {
+  parsed = JSON.parse(report);
+} catch {
+  parsed = null;
+}
+// npm audit also exits non-zero when it cannot run (registry down, auth): that must fail the build too.
+if (!parsed || parsed.error || typeof parsed.vulnerabilities !== 'object') {
+  console.error('npm audit did not return a report:', parsed?.error?.summary ?? report?.slice(0, 500));
+  process.exit(1);
+}
+const advisories = Object.values(parsed.vulnerabilities)
   .flatMap((v) => v.via.filter((x) => typeof x === 'object'))
   .filter((a) => a.severity === 'high' || a.severity === 'critical')
   .filter((a) => !Object.keys(ACCEPTED).some((id) => a.url?.endsWith(id)));

@@ -47,15 +47,16 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     /// <summary>What a LI.FI status says about a reported transaction, given the BTC transactions the invoice received.</summary>
     public static Verdict Judge(LifiTransferStatus status, string btcAddress, ISet<string> paymentTxIds)
     {
-        if (string.Equals(status.ToAddress, btcAddress, StringComparison.OrdinalIgnoreCase))
-            return Verdict.Confirmed;
+        // A payout the invoice received proves it, whatever the status says.
         if (Normalize(status.Receiving?.TxHash) is { } payout && paymentTxIds.Contains(payout))
+            return Verdict.Confirmed;
+        if (status.Status is "FAILED" or "INVALID")
+            return Verdict.Failed;
+        if (string.Equals(status.ToAddress, btcAddress, StringComparison.OrdinalIgnoreCase))
             return Verdict.Confirmed;
         // A real BTC address that is not this invoice's. An EVM-shaped one is LI.FI's placeholder for a non-EVM receiver.
         if (status.ToAddress is { Length: > 0 } to && !to.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
             return Verdict.PaysElsewhere;
-        if (status.Status is "FAILED" or "INVALID")
-            return Verdict.Failed;
         // Pending, or done but the BTC has not reached this invoice yet.
         return Verdict.Wait;
     }
