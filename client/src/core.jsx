@@ -116,7 +116,7 @@ function Panel({ opts, client, chain }) {
   const [choosing, setChoosing] = useState(false);
   const [quote, setQuote] = useState(null);
   const [quoteError, setQuoteError] = useState(null);
-  const [status, setStatus] = useState('idle'); // idle | paying | sent | failed
+  const [status, setStatus] = useState('idle'); // idle | paying | more | sent | failed
   const [payError, setPayError] = useState(null);
   const quoteSeq = useRef(0);
   const [usdRate, setUsdRate] = useState(null);
@@ -194,6 +194,8 @@ function Panel({ opts, client, chain }) {
   const minOut = quote?.estimate?.toAmountMin ? BigInt(quote.estimate.toAmountMin) : null;
   const safe = minOut !== null && minOut * 100n >= BigInt(toSats(opts.btcDue)) * BigInt(Math.round(MIN_ACCEPTED_OUTPUT * 100));
 
+  const signed = (step) => (step.execution?.actions || []).some((a) => a.txHash && (a.type === 'SWAP' || a.type === 'CROSS_CHAIN'));
+
   const pay = async () => {
     if (!quote || !enough || !safe) return;
     setStatus('paying'); setPayError(null);
@@ -211,9 +213,10 @@ function Panel({ opts, client, chain }) {
               if (action.type !== 'SWAP' && action.type !== 'CROSS_CHAIN') continue;
               seen.add(action.txHash);
               opts.onEvent('tx', { txHash: action.txHash, txLink: action.txLink, chainId: chain.id, type: action.type });
-              setStatus('sent');
             }
           }
+          // Closing the page is safe only once every step is signed: a later step needs the wallet again.
+          if (seen.size > 0) setStatus(route.steps.every(signed) ? 'sent' : 'more');
         },
       });
       setStatus('sent');
@@ -251,13 +254,13 @@ function Panel({ opts, client, chain }) {
     );
   }
 
-  if (status === 'paying' || status === 'sent') {
+  if (status === 'paying' || status === 'more' || status === 'sent') {
     return (
       <div className="text-center">
-        <p className="mb-1 fw-semibold">{status === 'paying' ? 'Confirm the payment in your wallet…' : 'Payment sent'}</p>
+        <p className="mb-1 fw-semibold">{status === 'sent' ? 'Payment sent' : 'Confirm the payment in your wallet…'}</p>
         <p className="text-muted small mb-0">
-          {status === 'paying'
-            ? 'Your wallet may ask you to approve the token first, then to send it.'
+          {status === 'paying' ? 'Your wallet may ask you to approve the token first, then to send it.'
+            : status === 'more' ? 'This payment takes more than one transaction. Keep this page open until your wallet has sent them all.'
             : 'It can take several minutes to arrive. You can close this page.'}
         </p>
       </div>

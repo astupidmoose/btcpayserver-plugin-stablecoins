@@ -8,9 +8,11 @@ using System.Threading.Tasks;
 using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
 using BTCPayServer.Logging;
+using BTCPayServer.Payments;
 using BTCPayServer.Services.Invoices;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Plugins.Stablecoins.Swap;
 
@@ -29,7 +31,10 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     /// <summary>Pending checks are bounded: beyond this, new reports are dropped (they are still in the log as unverified).</summary>
     public const int MaxPending = 2000;
 
-    public record Pending(string InvoiceId, string ChainName, string TxHash, string BtcAddress, DateTimeOffset Since);
+    /// <summary>PaymentMethodId is where the check is kept on the invoice; null for one that is only in memory (tests).</summary>
+    public record Pending(string InvoiceId, string ChainName, string TxHash, string BtcAddress, DateTimeOffset Since, PaymentMethodId? PaymentMethodId = null);
+
+    static readonly Newtonsoft.Json.JsonSerializer DetailsSerializer = BlobSerializer.CreateSerializer().Serializer;
 
     readonly ConcurrentDictionary<string, Pending> _pending = new();
     public Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.UtcNow;
@@ -41,6 +46,8 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     public Func<string, List<string>, Task>? WriteSearchTerms { get; set; }
     /// <summary>The BTC transaction ids this invoice has received; replaced by tests.</summary>
     public Func<string, Task<HashSet<string>>>? GetPaymentTxIds { get; set; }
+    /// <summary>Where the invoice's open checks are kept; replaced by tests.</summary>
+    public Func<string, PaymentMethodId, List<ReportedSource>, Task>? WriteReports { get; set; }
 
     public enum Verdict { Wait, Confirmed, PaysElsewhere, Failed }
 
@@ -71,15 +78,95 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     }
 
     /// <summary>False when the hash is already being checked or the queue is full.</summary>
-    public bool Enqueue(string invoiceId, string chainName, string txHash, string btcAddress)
+    public bool Enqueue(string invoiceId, string chainName, string txHash, string btcAddress, PaymentMethodId? paymentMethodId = null, DateTimeOffset? since = null)
     {
         if (_pending.Count >= MaxPending)
             return false;
-        return _pending.TryAdd(invoiceId + ":" + txHash.ToLowerInvariant(), new Pending(invoiceId, chainName, txHash, btcAddress, Now()));
+        return _pending.TryAdd(invoiceId + ":" + txHash.ToLowerInvariant(), new Pending(invoiceId, chainName, txHash, btcAddress, since ?? Now(), paymentMethodId));
+    }
+
+    /// <summary>
+    /// Checks a reported transaction and keeps the check on the invoice: the customer may close the page
+    /// right after paying, so a restart must not lose it.
+    /// </summary>
+    public async Task Report(string invoiceId, PaymentMethodId paymentMethodId, string chainName, string txHash, string btcAddress)
+    {
+        if (Enqueue(invoiceId, chainName, txHash, btcAddress, paymentMethodId))
+            await Save(invoiceId, paymentMethodId);
+    }
+
+    /// <summary>Picks up the checks saved on invoices BTCPay still monitors (after a restart or an update).</summary>
+    public async Task Restore(CancellationToken cancellationToken)
+    {
+        foreach (var chain in SwapSourceChain.PaymentMethods.Where(c => c.Provider == SwapProvider.Lifi))
+        {
+            InvoiceEntity[] invoices;
+            try
+            {
+                invoices = await invoiceRepository.GetMonitoredInvoices(chain.PaymentMethodId, cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(ex, "Could not list invoices to resume reported transaction checks for {Chain}", chain.Name);
+                continue;
+            }
+            foreach (var invoice in invoices)
+            {
+                if (invoice.GetPaymentPrompt(chain.PaymentMethodId) is not { Details: { } details, Destination: { } btcAddress })
+                    continue;
+                foreach (var r in details.ToObject<SwapToBtcPromptDetails>(DetailsSerializer)?.ReportedSources ?? [])
+                    Enqueue(invoice.Id, chain.Name, r.TxHash, btcAddress, chain.PaymentMethodId, r.Since);
+            }
+        }
+    }
+
+    async Task Done(string key, Pending p)
+    {
+        if (_pending.TryRemove(key, out _) && p.PaymentMethodId is { } pmi)
+            await Save(p.InvoiceId, pmi);
+    }
+
+    /// <summary>Writes the invoice's open checks for this payment method into its prompt details.</summary>
+    async Task Save(string invoiceId, PaymentMethodId paymentMethodId)
+    {
+        var gate = PromptDetailsGate.For(invoiceId);
+        await gate.WaitAsync();
+        try
+        {
+            var reports = _pending.Values.Where(v => v.InvoiceId == invoiceId && v.PaymentMethodId == paymentMethodId)
+                .Select(v => new ReportedSource { TxHash = v.TxHash, Since = v.Since }).ToList();
+            if (WriteReports is not null)
+            {
+                await WriteReports(invoiceId, paymentMethodId, reports);
+                return;
+            }
+            var invoice = await invoiceRepository.GetInvoice(invoiceId);
+            if (invoice?.GetPaymentPrompt(paymentMethodId) is not { Details: { } details })
+                return;
+            var parsed = details.ToObject<SwapToBtcPromptDetails>(DetailsSerializer) ?? new SwapToBtcPromptDetails();
+            parsed.ReportedSources = reports.Count > 0 ? reports : null;
+            await invoiceRepository.UpdatePaymentDetails(invoiceId, paymentMethodId, JObject.FromObject(parsed, DetailsSerializer));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not save the reported transaction checks of invoice {InvoiceId}", invoiceId);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        try
+        {
+            await Restore(stoppingToken);
+        }
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Could not resume reported transaction checks");
+        }
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -113,7 +200,7 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             {
                 if (expired)
                 {
-                    _pending.TryRemove(key, out _);
+                    await Done(key, p);
                     await Log(p.InvoiceId, $"LI.FI never saw the {p.ChainName} transaction the customer reported ({p.TxHash}). It is not this swap's transaction.",
                         InvoiceEventData.EventSeverity.Warning);
                 }
@@ -125,7 +212,7 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             var verdict = Judge(status, p.BtcAddress, received);
             if (verdict == Verdict.Wait && !expired)
                 continue;
-            _pending.TryRemove(key, out _);
+            await Done(key, p);
             if (verdict == Verdict.PaysElsewhere)
             {
                 await Log(p.InvoiceId, $"The {p.ChainName} transaction the customer reported ({p.TxHash}) does not pay this invoice: LI.FI shows it paying {status.ToAddress}.",

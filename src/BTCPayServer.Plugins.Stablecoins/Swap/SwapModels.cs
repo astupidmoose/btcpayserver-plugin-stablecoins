@@ -80,6 +80,17 @@ public class SwapToBtcPromptDetails
     public long FromChainId { get; set; }
     /// <summary>Every NEAR Intents deposit quoted for this checkout, followed until settled (also after a restart).</summary>
     public List<Intents.PersistedQuote>? IntentsQuotes { get; set; }
+    /// <summary>Source transactions customers reported that LI.FI has not settled yet (also checked after a restart).</summary>
+    public List<ReportedSource>? ReportedSources { get; set; }
+}
+
+/// <summary>A source transaction a customer reported, as kept on the invoice until SourceVerifier decides it.</summary>
+public class ReportedSource
+{
+    public string TxHash { get; set; } = "";
+    // BTCPay's serializer writes dates as unix seconds; this reads them back.
+    [Newtonsoft.Json.JsonConverter(typeof(NBitcoin.JsonConverters.DateTimeToUnixTimeConverter))]
+    public DateTimeOffset Since { get; set; }
 }
 
 /// <summary>
