@@ -62,7 +62,7 @@
             <p class="text-muted mt-2 mb-0">Getting your {{ d.symbol }} payment address…</p>
         </div>
         <div v-else-if="d.state === 'ready'" class="alert alert-warning small mb-0" role="note">
-            Send only {{ d.symbol }} on {{ d.networkName }} to this address, and send the full amount.
+            Send only <strong>{{ d.symbol }}</strong> on <strong>{{ d.networkName }}</strong> to this address, and send the full amount.
             If your exchange takes its withdrawal fee out of the amount, add the fee.
             <span v-if="d.memo"><br>Memo: <strong>{{ d.memo }}</strong></span>
         </div>
