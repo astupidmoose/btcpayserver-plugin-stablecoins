@@ -194,8 +194,9 @@ function Panel({ opts, client, chain }) {
   const minOut = quote?.estimate?.toAmountMin ? BigInt(quote.estimate.toAmountMin) : null;
   const safe = minOut !== null && minOut * 100n >= BigInt(toSats(opts.btcDue)) * BigInt(Math.round(MIN_ACCEPTED_OUTPUT * 100));
 
-  // A step is signed once its swap or bridge transaction went out and has not failed (a reverted one keeps its txHash).
-  const sent = (a) => a.txHash && (a.type === 'SWAP' || a.type === 'CROSS_CHAIN') && a.status !== 'FAILED';
+  // A step is signed once its swap or bridge transaction went out, unless it finally failed (a reverted one keeps
+  // its txHash). A failure that is not final, such as lost tracking, may still land, so it still counts.
+  const sent = (a) => a.txHash && (a.type === 'SWAP' || a.type === 'CROSS_CHAIN') && !(a.status === 'FAILED' && a.txFinal === true);
   const signed = (step) => (step.execution?.actions || []).some(sent);
 
   const pay = async () => {

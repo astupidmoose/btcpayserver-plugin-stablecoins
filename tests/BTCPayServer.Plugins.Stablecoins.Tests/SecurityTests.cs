@@ -62,6 +62,13 @@ public class SecurityTests
     }
 
     [Fact]
+    public void ARefundedSwapIsNotConfirmedByItsAddress()
+    {
+        var status = new LifiTransferStatus { Status = "DONE", Substatus = "REFUNDED", ToAddress = InvoiceAddress };
+        Assert.Equal(SourceVerifier.Verdict.Failed, SourceVerifier.Judge(status, InvoiceAddress, new HashSet<string>()));
+    }
+
+    [Fact]
     public async Task KeepsReportedTransactionsOnTheInvoiceUntilDecided()
     {
         var (verifier, lifi, _, _) = Verifier();

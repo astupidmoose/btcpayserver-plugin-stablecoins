@@ -64,7 +64,8 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
         if (Normalize(status.Receiving?.TxHash) is { } payout &&
             paymentTxIds.Contains(PayoutSats(status) is { } sats ? $"{payout}:{sats}" : payout))
             return Verdict.Confirmed;
-        if (status.Status is "FAILED" or "INVALID")
+        // A refund ends as DONE with substatus REFUNDED and may still name the invoice address.
+        if (status.Status is "FAILED" or "INVALID" || status.Substatus == "REFUNDED")
             return Verdict.Failed;
         if (string.Equals(status.ToAddress, btcAddress, StringComparison.OrdinalIgnoreCase))
             return Verdict.Confirmed;
