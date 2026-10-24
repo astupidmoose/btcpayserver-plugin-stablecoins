@@ -38,7 +38,8 @@
             <tbody>
             @foreach (var p in payments)
             {
-                <tr>
+                @* Struck out like BTCPay's own on-chain payments when the transaction was replaced: it no longer counts. *@
+                <tr style="@(p.Payment.Accounted ? "" : "text-decoration: line-through")" title="@(p.Payment.Accounted ? null : "Replaced: not counted")">
                     <td>
                         @p.Chain.Name
                     </td>
