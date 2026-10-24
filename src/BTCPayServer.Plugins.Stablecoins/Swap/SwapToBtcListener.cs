@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -141,6 +142,7 @@ public class SwapToBtcListener(
     /// </summary>
     async Task LabelTransaction(InvoiceEntity invoice, uint256 txId)
     {
+        _unlabeled.TryRemove((invoice.Id, txId), out _);
         try
         {
             var attachments = new List<Attachment> { Attachment.Invoice(invoice.Id) };
@@ -150,9 +152,13 @@ public class SwapToBtcListener(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not label the BTC transaction {TxId} of invoice {InvoiceId}", txId, invoice.Id);
+            _unlabeled[(invoice.Id, txId)] = invoice;
+            logger.LogWarning(ex, "Could not label the BTC transaction {TxId} of invoice {InvoiceId}; trying again on the next block", txId, invoice.Id);
         }
     }
+
+    /// <summary>Transactions whose wallet label could not be written; tried again on every sweep.</summary>
+    readonly ConcurrentDictionary<(string InvoiceId, uint256 TxId), InvoiceEntity> _unlabeled = new();
 
     /// <summary>
     /// Runs on every BTC block: records coins that arrived while no event was seen, and moves
@@ -160,6 +166,8 @@ public class SwapToBtcListener(
     /// </summary>
     public async Task Sweep(CancellationToken cancellationToken)
     {
+        foreach (var ((_, txId), invoice) in _unlabeled.ToArray())
+            await LabelTransaction(invoice, txId);
         var wallet = walletProvider.GetWallet(Network);
         // Every output the wallet received, spent or not: a payment that arrived while BTCPay was down may already be spent.
         var coinsByStrategy = new Dictionary<string, (OutPoint OutPoint, Script ScriptPubKey, IMoney Value, KeyPath? KeyPath)[]>();

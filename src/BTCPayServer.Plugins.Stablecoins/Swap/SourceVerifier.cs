@@ -41,8 +41,6 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     readonly ConcurrentDictionary<string, Pending> _pending = new();
     /// <summary>Invoices whose open checks could not be saved; saved again on the next round.</summary>
     readonly ConcurrentDictionary<(string InvoiceId, PaymentMethodId PaymentMethodId), byte> _unsaved = new();
-    /// <summary>Search terms of confirmed swaps that could not be written yet; written again on the next round.</summary>
-    readonly ConcurrentQueue<(string InvoiceId, List<string> Terms)> _unsearchable = new();
     public Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.UtcNow;
 
     public int PendingCount => _pending.Count;
@@ -215,8 +213,6 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             await Restore(cancellationToken);
         foreach (var (invoiceId, pmi) in _unsaved.Keys.ToArray())
             await Save(invoiceId, pmi);
-        for (var n = _unsearchable.Count; n > 0 && _unsearchable.TryDequeue(out var t); n--)
-            await AddSearchTerms(t.InvoiceId, t.Terms);
         foreach (var (key, p) in _pending.ToArray())
         {
             LifiTransferStatus? status;
@@ -253,6 +249,15 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             var verdict = Judge(status, p.BtcAddress, received);
             if (verdict == Verdict.Wait && !expired)
                 continue;
+            // A confirmed check stays pending, and saved, until its search terms are written.
+            if (verdict == Verdict.Confirmed)
+            {
+                var terms = new List<string> { p.TxHash };
+                if (!string.IsNullOrEmpty(status.FromAddress)) terms.Add(status.FromAddress);
+                if (Normalize(status.Receiving?.TxHash) is { } payout) terms.Add(payout);
+                if (!await AddSearchTerms(p.InvoiceId, terms.Distinct(StringComparer.OrdinalIgnoreCase).ToList()))
+                    continue;
+            }
             await Done(key, p);
             if (verdict == Verdict.PaysElsewhere)
             {
@@ -280,23 +285,20 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
                                    (status.FromAddress is { Length: > 0 } from ? $", from wallet {from}" : "") +
                                    (status.Receiving?.TxHash is { Length: > 0 } paid ? $", with BTC transaction {Normalize(paid)}" : "") +
                                    $". Track it at https://scan.li.fi/tx/{p.TxHash}", InvoiceEventData.EventSeverity.Info);
-            var terms = new List<string> { p.TxHash };
-            if (!string.IsNullOrEmpty(status.FromAddress)) terms.Add(status.FromAddress);
-            if (Normalize(status.Receiving?.TxHash) is { } payout) terms.Add(payout);
-            await AddSearchTerms(p.InvoiceId, terms.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
         }
     }
 
-    async Task AddSearchTerms(string invoiceId, List<string> terms)
+    async Task<bool> AddSearchTerms(string invoiceId, List<string> terms)
     {
         try
         {
             await (WriteSearchTerms?.Invoke(invoiceId, terms) ?? invoiceRepository.AddSearchTerms(invoiceId, terms));
+            return true;
         }
         catch (Exception ex)
         {
-            _unsearchable.Enqueue((invoiceId, terms));
             logger.LogWarning(ex, "Could not add search terms to invoice {InvoiceId}; trying again shortly", invoiceId);
+            return false;
         }
     }
 
