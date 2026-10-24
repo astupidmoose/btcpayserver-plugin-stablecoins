@@ -167,6 +167,14 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
         }
     }
 
+    /// <summary>
+    /// The BTC transactions that count toward the invoice. A payout replaced by fee bump is
+    /// unaccounted and must not confirm a swap, or a stale payout would hide that the new one went elsewhere.
+    /// </summary>
+    public static HashSet<string> AccountedTxIds(IEnumerable<PaymentEntity> payments) =>
+        // Payment ids of on-chain payments are outpoints: txid-index.
+        payments.Where(p => p.Accounted).Select(p => Normalize(p.Id.Split('-')[0])!).ToHashSet();
+
     /// <summary>Null when the invoice could not be read.</summary>
     async Task<HashSet<string>?> PaymentTxIds(string invoiceId)
     {
@@ -175,8 +183,7 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             if (GetPaymentTxIds is not null)
                 return await GetPaymentTxIds(invoiceId);
             var invoice = await invoiceRepository.GetInvoice(invoiceId);
-            // Payment ids of on-chain payments are outpoints: txid-index.
-            return invoice?.GetPayments(false).Select(p => Normalize(p.Id.Split('-')[0])!).ToHashSet() ?? [];
+            return invoice is null ? [] : AccountedTxIds(invoice.GetPayments(false));
         }
         catch (Exception ex)
         {

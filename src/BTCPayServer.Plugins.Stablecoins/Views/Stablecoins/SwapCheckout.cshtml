@@ -135,9 +135,11 @@
             const sats = Math.ceil(value * 1e8 * (1 + (Number(bufferPercent) || 0) / 100));
             return (sats / 1e8).toFixed(8);
         }
+        // keepalive lets the report finish when the customer closes the page right after paying, as the checkout invites.
         function reportSource(url, data) {
             return fetch(url, {
                 method: 'POST',
+                keepalive: true,
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
                 body: JSON.stringify(data)
             }).then(r => r.ok);

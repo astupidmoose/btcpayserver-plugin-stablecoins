@@ -1,6 +1,7 @@
 using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
 using BTCPayServer.Plugins.Stablecoins.Swap;
+using BTCPayServer.Services.Invoices;
 using NBitcoin.RPC;
 using NBXplorer.Models;
 
@@ -8,6 +9,18 @@ namespace BTCPayServer.Plugins.Stablecoins.Tests;
 
 public class ListenerStateTests
 {
+    [Fact]
+    public void ReplacedPayoutDoesNotConfirmASwap()
+    {
+        var payments = new[]
+        {
+            new PaymentEntity { Id = "AA11-0", Status = PaymentStatus.Unaccounted },
+            new PaymentEntity { Id = "bb22-1", Status = PaymentStatus.Processing },
+            new PaymentEntity { Id = "cc33-0", Status = PaymentStatus.Settled },
+        };
+        Assert.Equal(new HashSet<string> { "bb22", "cc33" }, SourceVerifier.AccountedTxIds(payments));
+    }
+
     [Fact]
     public void ReorganizedPaymentGoesBackToProcessing()
     {
