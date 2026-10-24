@@ -43,4 +43,6 @@ public class LifiTransferLeg
 {
     [JsonProperty("txHash")] public string? TxHash { get; set; }
     [JsonProperty("chainId")] public long? ChainId { get; set; }
+    /// <summary>In the token's smallest unit: satoshis for a Bitcoin payout.</summary>
+    [JsonProperty("amount")] public string? Amount { get; set; }
 }

@@ -50,11 +50,11 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             HasBtcWallet = store.GetDerivationSchemeSettings(handlers, "BTC") is not null,
             Enabled = !any.Disabled,
             Integrator = any.Integrator ?? SwapDefaults.Integrator,
-            HasApiKey = !string.IsNullOrEmpty(any.ApiKey),
+            ApiKey = any.ApiKey,
             FeePercent = any.Fee * 100m,
             BufferPercent = any.BufferPercent,
             WalletConnectProjectId = any.WalletConnectProjectId,
-            HasIntentsApiKey = !string.IsNullOrEmpty(any.IntentsApiKey),
+            IntentsApiKey = any.IntentsApiKey,
             RefundEvm = any.RefundEvm,
             RefundSolana = any.RefundSolana,
             RefundTron = any.RefundTron,
@@ -77,18 +77,15 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         var store = StoreData;
         logger.LogInformation("Saving swap settings of store {StoreId}", store.Id);
         vm.HasBtcWallet = store.GetDerivationSchemeSettings(handlers, "BTC") is not null;
-        var saved = await storeRepository.GetSettingAsync<SwapToBtcPaymentMethodConfig>(store.Id, StoreSettingName);
-        vm.HasApiKey = !string.IsNullOrEmpty(saved?.ApiKey);
-        vm.HasIntentsApiKey = !string.IsNullOrEmpty(saved?.IntentsApiKey);
         var config = new SwapToBtcPaymentMethodConfig
         {
             Integrator = vm.Integrator?.Trim(),
-            // Keys are write-only on the page: an empty field keeps the saved key.
-            ApiKey = vm.ClearApiKey ? null : Clean(vm.ApiKey) ?? saved?.ApiKey,
+            // The page shows the saved keys (hidden until revealed), so an emptied field removes the key.
+            ApiKey = Clean(vm.ApiKey),
             Fee = vm.FeePercent / 100m,
             BufferPercent = vm.BufferPercent,
             WalletConnectProjectId = string.IsNullOrWhiteSpace(vm.WalletConnectProjectId) ? null : vm.WalletConnectProjectId.Trim(),
-            IntentsApiKey = vm.ClearIntentsApiKey ? null : Clean(vm.IntentsApiKey) ?? saved?.IntentsApiKey,
+            IntentsApiKey = Clean(vm.IntentsApiKey),
             RefundEvm = Clean(vm.RefundEvm),
             RefundSolana = Clean(vm.RefundSolana),
             RefundTron = Clean(vm.RefundTron),
@@ -183,9 +180,6 @@ public class SwapSettingsViewModel
 
     [Display(Name = "LI.FI API key (optional)")]
     public string? ApiKey { get; set; }
-    public bool HasApiKey { get; set; }
-    [Display(Name = "Remove the saved key")]
-    public bool ClearApiKey { get; set; }
 
     [Display(Name = "Integrator fee (%)")]
     [Range(0, 9.99)]
@@ -200,9 +194,6 @@ public class SwapSettingsViewModel
 
     [Display(Name = "NEAR Intents API key")]
     public string? IntentsApiKey { get; set; }
-    public bool HasIntentsApiKey { get; set; }
-    [Display(Name = "Remove the saved key")]
-    public bool ClearIntentsApiKey { get; set; }
 
     [Display(Name = "Refund address for EVM networks (Ethereum, Base, Polygon...)")]
     public string? RefundEvm { get; set; }

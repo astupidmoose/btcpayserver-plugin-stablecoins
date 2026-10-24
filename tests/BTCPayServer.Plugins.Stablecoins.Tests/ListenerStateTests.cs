@@ -14,11 +14,11 @@ public class ListenerStateTests
     {
         var payments = new[]
         {
-            new PaymentEntity { Id = "AA11-0", Status = PaymentStatus.Unaccounted },
-            new PaymentEntity { Id = "bb22-1", Status = PaymentStatus.Processing },
-            new PaymentEntity { Id = "cc33-0", Status = PaymentStatus.Settled },
+            new PaymentEntity { Id = "AA11-0", Status = PaymentStatus.Unaccounted, Value = 0.001m },
+            new PaymentEntity { Id = "bb22-1", Status = PaymentStatus.Processing, Value = 0.00012345m },
+            new PaymentEntity { Id = "cc33-0", Status = PaymentStatus.Settled, Value = 0.5m },
         };
-        Assert.Equal(new HashSet<string> { "bb22", "cc33" }, SourceVerifier.AccountedTxIds(payments));
+        Assert.Equal(new HashSet<string> { "bb22", "bb22:12345", "cc33", "cc33:50000000" }, SourceVerifier.AccountedTxIds(payments));
     }
 
     [Fact]

@@ -61,19 +61,11 @@
             <div class="form-group">
                 <label asp-for="ApiKey" class="form-label"></label>
                 <div class="input-group">
-                    <input asp-for="ApiKey" type="password" value="" class="form-control font-monospace" autocomplete="new-password" spellcheck="false"
-                           placeholder="@(Model.HasApiKey ? "A key is set. Type a new one to replace it." : "")" />
+                    <input asp-for="ApiKey" type="password" value="@Model.ApiKey" class="form-control font-monospace" autocomplete="new-password" spellcheck="false" />
                     <button type="button" class="btn btn-secondary px-3 only-for-js" title="Show or hide the key" data-toggle-password="#ApiKey">
                         <vc:icon symbol="actions-show" />
                     </button>
                 </div>
-                @if (Model.HasApiKey)
-                {
-                    <div class="form-check mt-2">
-                        <input asp-for="ClearApiKey" type="checkbox" class="form-check-input" />
-                        <label asp-for="ClearApiKey" class="form-check-label"></label>
-                    </div>
-                }
                 <div class="form-text">Only needed if LI.FI's rate limits get in the way. Anyone who opens a checkout can read it, as LI.FI requires, so leave it empty unless you need it.</div>
             </div>
             <div class="form-group">
@@ -107,19 +99,11 @@
             <div class="form-group">
                 <label asp-for="IntentsApiKey" class="form-label"></label>
                 <div class="input-group">
-                    <input asp-for="IntentsApiKey" type="password" value="" class="form-control font-monospace" autocomplete="new-password" spellcheck="false"
-                           placeholder="@(Model.HasIntentsApiKey ? "A key is set. Type a new one to replace it." : "")" />
+                    <input asp-for="IntentsApiKey" type="password" value="@Model.IntentsApiKey" class="form-control font-monospace" autocomplete="new-password" spellcheck="false" />
                     <button type="button" class="btn btn-secondary px-3 only-for-js" title="Show or hide the key" data-toggle-password="#IntentsApiKey">
                         <vc:icon symbol="actions-show" />
                     </button>
                 </div>
-                @if (Model.HasIntentsApiKey)
-                {
-                    <div class="form-check mt-2">
-                        <input asp-for="ClearIntentsApiKey" type="checkbox" class="form-check-input" />
-                        <label asp-for="ClearIntentsApiKey" class="form-check-label"></label>
-                    </div>
-                }
                 <div class="form-text">From NEAR Intents (see the Authentication section of their <a href="https://github.com/defuse-protocol/one-click-sdk-typescript#authentication" target="_blank" rel="noreferrer noopener">1Click SDK</a>). It stays on this server.</div>
             </div>
             <div class="form-group">

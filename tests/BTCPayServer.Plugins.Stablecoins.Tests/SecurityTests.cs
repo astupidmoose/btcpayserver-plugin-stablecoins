@@ -43,6 +43,25 @@ public class SecurityTests
     }
 
     [Fact]
+    public async Task ABatchedPayoutConfirmsOnlyTheSwapWhoseAmountTheInvoiceReceived()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        // LI.FI paid two swaps in one Bitcoin transaction; this invoice received the 12345 sat output.
+        verifier.GetPaymentTxIds = _ => Task.FromResult(new HashSet<string> { InvoicePayoutTx, InvoicePayoutTx + ":12345" });
+        lifi.Statuses["0xmine"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx, ["amount"] = "12345" } };
+        lifi.Statuses["0xtheirs"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx, ["amount"] = "99999" } };
+        verifier.Enqueue("inv", "Base", "0xmine", InvoiceAddress);
+        verifier.Enqueue("inv", "Base", "0xtheirs", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+
+        Assert.Contains(logs, l => l.StartsWith("LI.FI confirms") && l.Contains("0xmine"));
+        Assert.DoesNotContain(logs, l => l.Contains("0xtheirs"));
+        Assert.Contains("0xmine", terms);
+        Assert.DoesNotContain("0xtheirs", terms);
+        Assert.Equal(1, verifier.PendingCount);
+    }
+
+    [Fact]
     public async Task KeepsReportedTransactionsOnTheInvoiceUntilDecided()
     {
         var (verifier, lifi, _, _) = Verifier();

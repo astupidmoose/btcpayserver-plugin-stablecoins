@@ -53,11 +53,16 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
 
     public enum Verdict { Wait, Confirmed, PaysElsewhere, Failed }
 
-    /// <summary>What a LI.FI status says about a reported transaction, given the BTC transactions the invoice received.</summary>
+    /// <summary>
+    /// What a LI.FI status says about a reported transaction, given what the invoice received
+    /// (see <see cref="AccountedTxIds"/>: each transaction id, and each "txid:satoshis" output).
+    /// </summary>
     public static Verdict Judge(LifiTransferStatus status, string btcAddress, ISet<string> paymentTxIds)
     {
-        // A payout the invoice received proves it, whatever the status says.
-        if (Normalize(status.Receiving?.TxHash) is { } payout && paymentTxIds.Contains(payout))
+        // A payout the invoice received proves it, whatever the status says. LI.FI can pay several swaps in one
+        // Bitcoin transaction, so when it reports the amount, the invoice must have received exactly that output.
+        if (Normalize(status.Receiving?.TxHash) is { } payout &&
+            paymentTxIds.Contains(PayoutSats(status) is { } sats ? $"{payout}:{sats}" : payout))
             return Verdict.Confirmed;
         if (status.Status is "FAILED" or "INVALID")
             return Verdict.Failed;
@@ -69,6 +74,12 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
         // Pending, or done but the BTC has not reached this invoice yet.
         return Verdict.Wait;
     }
+
+    /// <summary>The satoshis LI.FI says it paid out, when it says.</summary>
+    public static long? PayoutSats(LifiTransferStatus status) =>
+        long.TryParse(status.Receiving?.Amount, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var sats) && sats > 0
+            ? sats
+            : null;
 
     /// <summary>A BTC transaction id as BTCPay writes it: lower case, no 0x.</summary>
     public static string? Normalize(string? txHash)
@@ -246,7 +257,7 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             {
                 await Log(p.InvoiceId, $"Could not confirm that the {p.ChainName} transaction the customer reported ({p.TxHash}) pays this invoice: " +
                                        (status.Receiving?.TxHash is { Length: > 0 } btc
-                                           ? $"LI.FI paid BTC in {btc}, which this invoice did not receive."
+                                           ? "LI.FI paid " + (PayoutSats(status) is { } sats ? $"{sats} sats " : "") + $"in BTC transaction {Normalize(btc)}, which this invoice did not receive."
                                            : $"LI.FI still shows it as {status.Status}.") +
                                        $" Details at https://scan.li.fi/tx/{p.TxHash}", InvoiceEventData.EventSeverity.Warning);
                 continue;
@@ -275,8 +286,10 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     /// unaccounted and must not confirm a swap, or a stale payout would hide that the new one went elsewhere.
     /// </summary>
     public static HashSet<string> AccountedTxIds(IEnumerable<PaymentEntity> payments) =>
-        // Payment ids of on-chain payments are outpoints: txid-index.
-        payments.Where(p => p.Accounted).Select(p => Normalize(p.Id.Split('-')[0])!).ToHashSet();
+        // Payment ids of on-chain payments are outpoints: txid-index. Each output is also listed with its amount.
+        payments.Where(p => p.Accounted)
+            .SelectMany(p => Normalize(p.Id.Split('-')[0]) is { } tx ? new[] { tx, $"{tx}:{(long)decimal.Round(p.Value * 100_000_000m)}" } : [])
+            .ToHashSet();
 
     /// <summary>Null when the invoice could not be read.</summary>
     async Task<HashSet<string>?> PaymentTxIds(string invoiceId)
