@@ -194,7 +194,9 @@ function Panel({ opts, client, chain }) {
   const minOut = quote?.estimate?.toAmountMin ? BigInt(quote.estimate.toAmountMin) : null;
   const safe = minOut !== null && minOut * 100n >= BigInt(toSats(opts.btcDue)) * BigInt(Math.round(MIN_ACCEPTED_OUTPUT * 100));
 
-  const signed = (step) => (step.execution?.actions || []).some((a) => a.txHash && (a.type === 'SWAP' || a.type === 'CROSS_CHAIN'));
+  // A step is signed once its swap or bridge transaction went out and has not failed (a reverted one keeps its txHash).
+  const sent = (a) => a.txHash && (a.type === 'SWAP' || a.type === 'CROSS_CHAIN') && a.status !== 'FAILED';
+  const signed = (step) => (step.execution?.actions || []).some(sent);
 
   const pay = async () => {
     if (!quote || !enough || !safe) return;
@@ -225,9 +227,9 @@ function Panel({ opts, client, chain }) {
       opts.onEvent('completed', quote);
     } catch (e) {
       // Once every step is signed the BTC is on its way even if tracking fails.
-      if (seen.size > 0 && last?.steps.every(signed)) { setStatus('sent'); return; }
+      if (last?.steps.every(signed)) { setStatus('sent'); return; }
       // Part of a multi-step payment went out: paying again would pay twice.
-      if (seen.size > 0) { setStatus('partial'); opts.onEvent('failed', e); return; }
+      if (last?.steps.some(signed)) { setStatus('partial'); opts.onEvent('failed', e); return; }
       setStatus('failed');
       setPayError(errorText(e));
       opts.onEvent('failed', e);
