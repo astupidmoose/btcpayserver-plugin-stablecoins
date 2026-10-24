@@ -62,7 +62,7 @@
             <p class="text-muted mt-2 mb-0">Getting your {{ d.symbol }} payment address…</p>
         </div>
         <div v-else-if="d.state === 'ready'" class="alert alert-warning small mb-0" role="note">
-            Send only {{ d.symbol }} on {{ d.networkName }} to this address, and send the full amount.
+            Send only <strong>{{ d.symbol }}</strong> on <strong>{{ d.networkName }}</strong> to this address, and send the full amount.
             If your exchange takes its withdrawal fee out of the amount, add the fee.
             <span v-if="d.memo"><br>Memo: <strong>{{ d.memo }}</strong></span>
         </div>
@@ -72,7 +72,7 @@
         <div v-else-if="d.state === 'received'" class="text-center">
             <p class="fw-semibold mb-1">{{ d.symbol }} payment received</p>
             <p class="text-muted small mb-0">
-                Keep this page open. It updates by itself once the payment is confirmed<span v-if="d.minutes">, usually within {{ d.minutes }} minutes</span>.
+                It is usually confirmed<span v-if="d.minutes"> within {{ d.minutes }} minutes</span><span v-else> within several minutes</span>. You can close this page.
             </p>
         </div>
         <div v-else-if="d.state === 'refunded'" class="alert alert-danger small mb-0" role="alert">
@@ -135,9 +135,11 @@
             const sats = Math.ceil(value * 1e8 * (1 + (Number(bufferPercent) || 0) / 100));
             return (sats / 1e8).toFixed(8);
         }
+        // keepalive lets the report finish when the customer closes the page right after paying, as the checkout invites.
         function reportSource(url, data) {
             return fetch(url, {
                 method: 'POST',
+                keepalive: true,
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
                 body: JSON.stringify(data)
             }).then(r => r.ok);

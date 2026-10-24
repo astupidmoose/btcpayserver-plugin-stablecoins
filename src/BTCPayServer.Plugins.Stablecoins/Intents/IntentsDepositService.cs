@@ -110,7 +110,6 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
     }
 
     readonly ConcurrentDictionary<string, Entry> _entries = new();
-    readonly ConcurrentDictionary<string, SemaphoreSlim> _saving = new();
     readonly ConcurrentDictionary<string, (DateTimeOffset At, List<OneClickToken> Tokens)> _tokens = new();
     /// <summary>
     /// Minimum swap NEAR Intents asked for on each network ("Temporary swap limits: minimum swap amount is $100"), in USD.
@@ -402,7 +401,7 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
     /// <summary>Writes the invoice's quotes for this payment method into its prompt details.</summary>
     async Task Save(Entry entry)
     {
-        var gate = _saving.GetOrAdd(entry.InvoiceId, _ => new SemaphoreSlim(1, 1));
+        var gate = PromptDetailsGate.For(entry.InvoiceId);
         await gate.WaitAsync();
         try
         {
@@ -528,8 +527,8 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
             lock (entry)
                 done = now - entry.Touched > ForgetAfter &&
                        entry.Quotes.All(q => q.Final || q.Payment.Deadline is { } d && now > d + FollowAfterDeadline);
-            if (done && _entries.TryRemove(key, out _))
-                _saving.TryRemove(entry.InvoiceId, out _);
+            if (done)
+                _entries.TryRemove(key, out _);
         }
     }
 }

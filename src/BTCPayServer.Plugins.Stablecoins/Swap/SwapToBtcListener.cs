@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -11,7 +12,9 @@ using BTCPayServer.HostedServices;
 using BTCPayServer.Logging;
 using BTCPayServer.Payments;
 using BTCPayServer.Services;
+using BTCPayServer.Services.Apps;
 using BTCPayServer.Services.Invoices;
+using BTCPayServer.Services.PaymentRequests;
 using BTCPayServer.Services.Wallets;
 using Microsoft.Extensions.Logging;
 using NBitcoin;
@@ -37,6 +40,7 @@ public class SwapToBtcListener(
     BTCPayNetworkProvider networkProvider,
     BTCPayWalletProvider walletProvider,
     ExplorerClientProvider explorerClientProvider,
+    WalletRepository walletRepository,
     ILogger<SwapToBtcListener> logger) : EventHostedServiceBase(eventAggregator, logger)
 {
     BTCPayNetwork Network => networkProvider.BTC;
@@ -99,6 +103,7 @@ public class SwapToBtcListener(
         var id = outPoint.ToString();
         if (invoice.GetPayments(false).Any(p => p.Id == id && p.PaymentMethodId == pmi))
         {
+            await LabelTransaction(invoice, outPoint.Hash);
             await RefreshConfirmations(wallet, invoice, handler);
             return;
         }
@@ -126,9 +131,34 @@ public class SwapToBtcListener(
             invoice.Id, amount, handler.Chain.Name, id);
         wallet.InvalidateCache(handler.Network.NBXplorerNetwork.DerivationStrategyFactory.Parse(
             handler.ParsePaymentPromptDetails(invoice.GetPaymentPrompt(pmi)!.Details).AccountDerivation!));
+        await LabelTransaction(invoice, outPoint.Hash);
         invoice = await invoiceRepository.GetInvoice(invoice.Id);
         EventAggregator.Publish(new InvoiceEvent(invoice, InvoiceEvent.ReceivedPayment) { Payment = payment });
     }
+
+    /// <summary>
+    /// Tags the BTC transaction in the store's wallet with its invoice (and app or payment request), as BTCPay does
+    /// for its own on-chain payments: BTCPay's labeler only handles its own payment method.
+    /// </summary>
+    async Task LabelTransaction(InvoiceEntity invoice, uint256 txId)
+    {
+        _unlabeled.TryRemove((invoice.Id, txId), out _);
+        try
+        {
+            var attachments = new List<Attachment> { Attachment.Invoice(invoice.Id) };
+            attachments.AddRange(PaymentRequestRepository.GetPaymentIdsFromInternalTags(invoice).Select(id => Attachment.PaymentRequest(id)));
+            attachments.AddRange(AppService.GetAppInternalTags(invoice).Select(Attachment.App));
+            await walletRepository.AddWalletTransactionAttachment(new WalletId(invoice.StoreId, Network.CryptoCode), txId, attachments);
+        }
+        catch (Exception ex)
+        {
+            _unlabeled[(invoice.Id, txId)] = invoice;
+            logger.LogWarning(ex, "Could not label the BTC transaction {TxId} of invoice {InvoiceId}; trying again on the next block", txId, invoice.Id);
+        }
+    }
+
+    /// <summary>Transactions whose wallet label could not be written; tried again on every sweep.</summary>
+    readonly ConcurrentDictionary<(string InvoiceId, uint256 TxId), InvoiceEntity> _unlabeled = new();
 
     /// <summary>
     /// Runs on every BTC block: records coins that arrived while no event was seen, and moves
@@ -136,6 +166,8 @@ public class SwapToBtcListener(
     /// </summary>
     public async Task Sweep(CancellationToken cancellationToken)
     {
+        foreach (var ((_, txId), invoice) in _unlabeled.ToArray())
+            await LabelTransaction(invoice, txId);
         var wallet = walletProvider.GetWallet(Network);
         // Every output the wallet received, spent or not: a payment that arrived while BTCPay was down may already be spent.
         var coinsByStrategy = new Dictionary<string, (OutPoint OutPoint, Script ScriptPubKey, IMoney Value, KeyPath? KeyPath)[]>();
@@ -221,6 +253,9 @@ public class SwapToBtcListener(
         if (changed.Count == 0)
             return;
         await paymentService.UpdatePayments(changed);
+        // Labeling is idempotent: redoing it as confirmations change repairs a label that failed when the payment arrived.
+        foreach (var hash in changed.Select(p => OutPoint.Parse(handler.ParsePaymentDetails(p.Details).Outpoint).Hash).Distinct())
+            await LabelTransaction(invoice, hash);
         EventAggregator.Publish(new InvoiceNeedUpdateEvent(invoice.Id));
     }
 

@@ -116,7 +116,7 @@ function Panel({ opts, client, chain }) {
   const [choosing, setChoosing] = useState(false);
   const [quote, setQuote] = useState(null);
   const [quoteError, setQuoteError] = useState(null);
-  const [status, setStatus] = useState('idle'); // idle | paying | sent | failed
+  const [status, setStatus] = useState('idle'); // idle | paying | more | sent | partial | failed
   const [payError, setPayError] = useState(null);
   const quoteSeq = useRef(0);
   const [usdRate, setUsdRate] = useState(null);
@@ -194,33 +194,43 @@ function Panel({ opts, client, chain }) {
   const minOut = quote?.estimate?.toAmountMin ? BigInt(quote.estimate.toAmountMin) : null;
   const safe = minOut !== null && minOut * 100n >= BigInt(toSats(opts.btcDue)) * BigInt(Math.round(MIN_ACCEPTED_OUTPUT * 100));
 
+  // A step is signed once its swap or bridge transaction went out, unless it finally failed (a reverted one keeps
+  // its txHash). A failure that is not final, such as lost tracking, may still land, so it still counts.
+  const sent = (a) => a.txHash && (a.type === 'SWAP' || a.type === 'CROSS_CHAIN') && !(a.status === 'FAILED' && a.txFinal === true);
+  const signed = (step) => (step.execution?.actions || []).some(sent);
+
   const pay = async () => {
     if (!quote || !enough || !safe) return;
     setStatus('paying'); setPayError(null);
     const requested = BigInt(toSats(opts.btcDue));
     const seen = new Set();
+    let last = null;
     try {
       opts.onEvent('started', quote);
       await executeRoute(client, convertQuoteToRoute(quote), {
         acceptExchangeRateUpdateHook: async ({ newToAmount }) =>
           BigInt(newToAmount) * 100n >= requested * BigInt(Math.round(MIN_ACCEPTED_OUTPUT * 100)),
         updateRouteHook: (route) => {
+          last = route;
           for (const step of route.steps) {
             for (const action of step.execution?.actions || []) {
               if (!action.txHash || seen.has(action.txHash)) continue;
               if (action.type !== 'SWAP' && action.type !== 'CROSS_CHAIN') continue;
               seen.add(action.txHash);
               opts.onEvent('tx', { txHash: action.txHash, txLink: action.txLink, chainId: chain.id, type: action.type });
-              setStatus('sent');
             }
           }
+          // Closing the page is safe only once every step is signed: a later step needs the wallet again.
+          if (seen.size > 0) setStatus(route.steps.every(signed) ? 'sent' : 'more');
         },
       });
       setStatus('sent');
       opts.onEvent('completed', quote);
     } catch (e) {
-      // Once a transaction is signed the BTC is on its way even if tracking fails.
-      if (seen.size > 0) { setStatus('sent'); return; }
+      // Once every step is signed the BTC is on its way even if tracking fails.
+      if (last?.steps.every(signed)) { setStatus('sent'); return; }
+      // Part of a multi-step payment went out: paying again would pay twice.
+      if (last?.steps.some(signed)) { setStatus('partial'); opts.onEvent('failed', e); return; }
       setStatus('failed');
       setPayError(errorText(e));
       opts.onEvent('failed', e);
@@ -251,14 +261,25 @@ function Panel({ opts, client, chain }) {
     );
   }
 
-  if (status === 'paying' || status === 'sent') {
+  if (status === 'partial') {
     return (
       <div className="text-center">
-        <p className="mb-1 fw-semibold">{status === 'paying' ? 'Confirm the payment in your wallet…' : 'Payment sent'}</p>
+        <p className="mb-1 fw-semibold">Payment not finished</p>
         <p className="text-muted small mb-0">
-          {status === 'paying'
-            ? 'Your wallet may ask you to approve the token first, then to send it.'
-            : 'Keep this page open. It updates by itself when the payment is received, which can take several minutes.'}
+          Part of this payment was sent, but your wallet did not send the rest. Do not pay again: contact the store with this invoice so they can help.
+        </p>
+      </div>
+    );
+  }
+
+  if (status === 'paying' || status === 'more' || status === 'sent') {
+    return (
+      <div className="text-center">
+        <p className="mb-1 fw-semibold">{status === 'sent' ? 'Payment sent' : 'Confirm the payment in your wallet…'}</p>
+        <p className="text-muted small mb-0">
+          {status === 'paying' ? 'Your wallet may ask you to approve the token first, then to send it.'
+            : status === 'more' ? 'This payment takes more than one transaction. Keep this page open until your wallet has sent them all.'
+            : 'It can take several minutes to arrive. You can close this page.'}
         </p>
       </div>
     );

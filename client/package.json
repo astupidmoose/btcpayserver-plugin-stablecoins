@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Wallet payment panel embedded in BTCPay checkout. Built into ../src/BTCPayServer.Plugins.Stablecoins/Resources/js/swappanel-*.js",
   "scripts": {
-    "build": "npm audit --omit=dev --audit-level=high && node build.mjs",
+    "build": "node audit.mjs && node build.mjs",
     "build:offline": "node build.mjs"
   },
   "dependencies": {

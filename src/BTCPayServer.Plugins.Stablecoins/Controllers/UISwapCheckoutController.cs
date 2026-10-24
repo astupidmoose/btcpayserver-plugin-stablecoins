@@ -74,8 +74,8 @@ public class UISwapCheckoutController(
             await Note(invoiceId, $"from:{from}", $"Customer-reported, unverified: started paying {paying} on {chain.Name} from wallet {from}.");
         }
         if (txHash is not null &&
-            await Note(invoiceId, $"tx:{txHash}", $"Customer-reported, unverified: {chain.Name} transaction {txHash}. Checking it with LI.FI."))
-            verifier.Enqueue(invoiceId, chain.Name, txHash, btcAddress);
+            await Note(invoiceId, $"tx:{txHash}", $"Customer-reported, unverified: {chain.Name} transaction {txHash}. Checking it with LI.FI. Track it at https://scan.li.fi/tx/{txHash}"))
+            await verifier.Report(invoiceId, pmi, chain.Name, txHash, btcAddress);
         return Json(new { ok = true });
     }
 

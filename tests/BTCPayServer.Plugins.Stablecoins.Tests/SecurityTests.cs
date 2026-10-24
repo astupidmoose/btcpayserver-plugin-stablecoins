@@ -11,6 +11,9 @@ namespace BTCPayServer.Plugins.Stablecoins.Tests;
 public class SecurityTests
 {
     const string InvoiceAddress = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh";
+    const string InvoicePayoutTx = "9d3cf9b0000000000000000000000000000000000000000000000000000787b0";
+    // What LI.FI reports as toAddress for a Bitcoin destination.
+    const string LifiPlaceholder = "0x11f111f111f111f111f111f111f111f111f111f1";
 
     class FakeLifi : HttpMessageHandler
     {
@@ -33,9 +36,260 @@ public class SecurityTests
         var verifier = new SourceVerifier(new LifiStatusClient(new HttpClient(lifi)), null!, NullLogger<SourceVerifier>.Instance)
         {
             WriteLog = (_, message, _) => { logs.Add(message); return Task.CompletedTask; },
-            WriteSearchTerms = (_, t) => { terms.AddRange(t); return Task.CompletedTask; }
+            WriteSearchTerms = (_, t) => { terms.AddRange(t); return Task.CompletedTask; },
+            GetPaymentTxIds = _ => Task.FromResult(new HashSet<string> { InvoicePayoutTx })
         };
         return (verifier, lifi, logs, terms);
+    }
+
+    [Fact]
+    public async Task ABatchedPayoutConfirmsOnlyTheSwapWhoseAmountTheInvoiceReceived()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        // LI.FI paid two swaps in one Bitcoin transaction; this invoice received the 12345 sat output.
+        verifier.GetPaymentTxIds = _ => Task.FromResult(new HashSet<string> { InvoicePayoutTx, InvoicePayoutTx + ":12345" });
+        lifi.Statuses["0xmine"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx, ["amount"] = "12345" } };
+        lifi.Statuses["0xtheirs"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx, ["amount"] = "99999" } };
+        verifier.Enqueue("inv", "Base", "0xmine", InvoiceAddress);
+        verifier.Enqueue("inv", "Base", "0xtheirs", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+
+        Assert.Contains(logs, l => l.StartsWith("LI.FI confirms") && l.Contains("0xmine"));
+        Assert.DoesNotContain(logs, l => l.Contains("0xtheirs"));
+        Assert.Contains("0xmine", terms);
+        Assert.DoesNotContain("0xtheirs", terms);
+        Assert.Equal(1, verifier.PendingCount);
+    }
+
+    [Fact]
+    public void ARefundedSwapIsNotConfirmedByItsAddress()
+    {
+        var status = new LifiTransferStatus { Status = "DONE", Substatus = "REFUNDED", ToAddress = InvoiceAddress };
+        Assert.Equal(SourceVerifier.Verdict.Failed, SourceVerifier.Judge(status, InvoiceAddress, new HashSet<string>()));
+    }
+
+    [Fact]
+    public async Task WritesSearchTermsAgainAfterAFailedWrite()
+    {
+        var (verifier, lifi, _, _) = Verifier();
+        var terms = new List<string>();
+        var fail = true;
+        verifier.WriteSearchTerms = (_, t) =>
+        {
+            if (fail) { fail = false; throw new InvalidOperationException("database unavailable"); }
+            terms.AddRange(t);
+            return Task.CompletedTask;
+        };
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx } };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Empty(terms);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Contains("0xbase", terms);
+    }
+
+    [Fact]
+    public async Task KeepsCheckingPastTheDeadlineWhileLifiIsUnreachable()
+    {
+        var (verifier, _, logs, _) = Verifier();
+        var lifi = new SourceVerifier(new LifiStatusClient(new HttpClient(new Unreachable())), null!, NullLogger<SourceVerifier>.Instance)
+        {
+            WriteLog = (_, message, _) => { logs.Add(message); return Task.CompletedTask; },
+            GetPaymentTxIds = _ => Task.FromResult(new HashSet<string>())
+        };
+        var now = DateTimeOffset.UtcNow;
+        lifi.Now = () => now;
+        lifi.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        now += SourceVerifier.GiveUpAfter + TimeSpan.FromMinutes(1);
+        await lifi.CheckAll(CancellationToken.None);
+        Assert.Equal(1, lifi.PendingCount);
+        Assert.Empty(logs);
+        now += SourceVerifier.GiveUpUnreachableAfter;
+        await lifi.CheckAll(CancellationToken.None);
+        Assert.Equal(0, lifi.PendingCount);
+        Assert.Contains(logs, l => l.StartsWith("Could not get an answer from LI.FI"));
+    }
+
+    [Fact]
+    public async Task RetriesAnInvalidStatusInsteadOfFailingTheSwap()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        var now = DateTimeOffset.UtcNow;
+        verifier.Now = () => now;
+        // INVALID: a third-party service LI.FI relies on is down. It says nothing about the swap.
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "INVALID" };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        now += SourceVerifier.GiveUpAfter + TimeSpan.FromMinutes(1);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(1, verifier.PendingCount);
+        Assert.Empty(logs);
+
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx } };
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(0, verifier.PendingCount);
+        Assert.StartsWith("LI.FI confirms", Assert.Single(logs));
+        Assert.Contains("0xbase", terms);
+    }
+
+    [Fact]
+    public async Task APendingSwapIsNotConfirmedByItsAddress()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        verifier.GetPaymentTxIds = _ => Task.FromResult(new HashSet<string>());
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["toAddress"] = InvoiceAddress };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(1, verifier.PendingCount);
+        Assert.Empty(terms);
+
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "FAILED", ["toAddress"] = InvoiceAddress };
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(0, verifier.PendingCount);
+        Assert.Empty(terms);
+        Assert.Contains(logs, l => l.Contains("as FAILED"));
+    }
+
+    [Fact]
+    public void OnlyACompletedSwapIsConfirmedByItsAddress()
+    {
+        var none = new HashSet<string>();
+        Assert.Equal(SourceVerifier.Verdict.Confirmed, SourceVerifier.Judge(new LifiTransferStatus { Status = "DONE", Substatus = "COMPLETED", ToAddress = InvoiceAddress }, InvoiceAddress, none));
+        Assert.Equal(SourceVerifier.Verdict.Confirmed, SourceVerifier.Judge(new LifiTransferStatus { Status = "DONE", ToAddress = InvoiceAddress }, InvoiceAddress, none));
+        // PARTIAL: the customer got another token instead of BTC.
+        Assert.Equal(SourceVerifier.Verdict.Wait, SourceVerifier.Judge(new LifiTransferStatus { Status = "DONE", Substatus = "PARTIAL", ToAddress = InvoiceAddress }, InvoiceAddress, none));
+        Assert.Equal(SourceVerifier.Verdict.Wait, SourceVerifier.Judge(new LifiTransferStatus { Status = "PENDING", ToAddress = InvoiceAddress }, InvoiceAddress, none));
+    }
+
+    [Fact]
+    public async Task KeepsCheckingASwapLifiStillShowsInProgress()
+    {
+        var (verifier, lifi, logs, _) = Verifier();
+        var now = DateTimeOffset.UtcNow;
+        verifier.Now = () => now;
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["toAddress"] = LifiPlaceholder };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        now += SourceVerifier.GiveUpAfter + TimeSpan.FromMinutes(1);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(1, verifier.PendingCount);
+        Assert.Empty(logs);
+        now += SourceVerifier.GiveUpUnreachableAfter;
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(0, verifier.PendingCount);
+        Assert.Contains(logs, l => l.Contains("still shows it as PENDING"));
+    }
+
+    class Unreachable : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+    }
+
+    [Fact]
+    public async Task KeepsReportedTransactionsOnTheInvoiceUntilDecided()
+    {
+        var (verifier, lifi, _, _) = Verifier();
+        var saved = new List<List<ReportedSource>>();
+        verifier.WriteReports = (_, _, reports) => { saved.Add(reports); return Task.CompletedTask; };
+        var pmi = SwapSourceChain.PaymentMethods.First(c => c.Provider == SwapProvider.Lifi).PaymentMethodId;
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["toAddress"] = LifiPlaceholder };
+
+        await verifier.Report("inv", pmi, "Base", "0xbase", InvoiceAddress);
+        Assert.Equal("0xbase", Assert.Single(saved[^1]).TxHash);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Single(saved);
+
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx } };
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Empty(saved[^1]);
+    }
+
+    [Fact]
+    public async Task SavesReportedTransactionsAgainAfterAFailedWrite()
+    {
+        var (verifier, lifi, _, _) = Verifier();
+        var saved = new List<List<ReportedSource>>();
+        var fail = true;
+        verifier.WriteReports = (_, _, reports) =>
+        {
+            if (fail) { fail = false; throw new InvalidOperationException("database unavailable"); }
+            saved.Add(reports);
+            return Task.CompletedTask;
+        };
+        var pmi = SwapSourceChain.PaymentMethods.First(c => c.Provider == SwapProvider.Lifi).PaymentMethodId;
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["toAddress"] = LifiPlaceholder };
+
+        await verifier.Report("inv", pmi, "Base", "0xbase", InvoiceAddress);
+        Assert.Empty(saved);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal("0xbase", Assert.Single(Assert.Single(saved)).TxHash);
+    }
+
+    [Fact]
+    public void ReportedTransactionsReadBackWithBtcpaysSerializer()
+    {
+        var serializer = BlobSerializer.CreateSerializer().Serializer;
+        var since = DateTimeOffset.FromUnixTimeSeconds(1_790_000_000);
+        var details = JObject.FromObject(new SwapToBtcPromptDetails { ReportedSources = [new ReportedSource { TxHash = "0xbase", Since = since }] }, serializer);
+        var back = details.ToObject<SwapToBtcPromptDetails>(serializer)!;
+        Assert.Equal(since, Assert.Single(back.ReportedSources!).Since);
+    }
+
+    [Fact]
+    public async Task ConfirmsByTheBtcPayoutWhenLifiShowsAPlaceholderReceiver()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["fromAddress"] = "0xwallet", ["toAddress"] = LifiPlaceholder };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+        // In flight: no warning, still checked.
+        Assert.Empty(logs);
+        Assert.Equal(1, verifier.PendingCount);
+
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["fromAddress"] = "0xwallet", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = "0x" + InvoicePayoutTx.ToUpperInvariant() } };
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(0, verifier.PendingCount);
+        Assert.Single(logs);
+        Assert.StartsWith("LI.FI confirms", logs[0]);
+        Assert.Equal(new[] { "0xbase", "0xwallet", InvoicePayoutTx }, terms);
+    }
+
+    [Fact]
+    public async Task KeepsCheckingWhenTheInvoiceCannotBeRead()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx } };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        verifier.GetPaymentTxIds = _ => throw new InvalidOperationException("database unavailable");
+        verifier.Now = () => DateTimeOffset.UtcNow + SourceVerifier.GiveUpAfter + TimeSpan.FromMinutes(1);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Empty(logs);
+        Assert.Equal(1, verifier.PendingCount);
+
+        verifier.GetPaymentTxIds = _ => Task.FromResult(new HashSet<string> { InvoicePayoutTx });
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.StartsWith("LI.FI confirms", Assert.Single(logs));
+        Assert.Contains(InvoicePayoutTx, terms);
+    }
+
+    [Fact]
+    public async Task WarnsWhenLifisBtcPayoutNeverReachesTheInvoice()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = "otherbtctx" } };
+        // LI.FI may keep the intended BTC address on a failed swap: still a failure.
+        lifi.Statuses["0xfailed"] = new JObject { ["status"] = "FAILED", ["substatus"] = "REFUNDED", ["toAddress"] = InvoiceAddress };
+        verifier.Enqueue("inv", "Base", "0xbase", InvoiceAddress);
+        verifier.Enqueue("inv", "Base", "0xfailed", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Contains(logs, l => l.Contains("0xfailed") && l.Contains("FAILED (REFUNDED)"));
+        // The payout may still be on its way to the invoice: wait.
+        Assert.Equal(1, verifier.PendingCount);
+
+        verifier.Now = () => DateTimeOffset.UtcNow + SourceVerifier.GiveUpAfter + TimeSpan.FromMinutes(1);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Contains(logs, l => l.Contains("0xbase") && l.Contains("otherbtctx") && l.Contains("did not receive"));
+        Assert.DoesNotContain(logs, l => l.Contains("does not pay this invoice"));
+        Assert.Empty(terms);
     }
 
     [Fact]
