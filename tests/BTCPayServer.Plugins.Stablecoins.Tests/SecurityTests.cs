@@ -43,6 +43,35 @@ public class SecurityTests
     }
 
     [Fact]
+    public async Task KeepsReportedTransactionsOnTheInvoiceUntilDecided()
+    {
+        var (verifier, lifi, _, _) = Verifier();
+        var saved = new List<List<ReportedSource>>();
+        verifier.WriteReports = (_, _, reports) => { saved.Add(reports); return Task.CompletedTask; };
+        var pmi = SwapSourceChain.PaymentMethods.First(c => c.Provider == SwapProvider.Lifi).PaymentMethodId;
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["toAddress"] = LifiPlaceholder };
+
+        await verifier.Report("inv", pmi, "Base", "0xbase", InvoiceAddress);
+        Assert.Equal("0xbase", Assert.Single(saved[^1]).TxHash);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Single(saved);
+
+        lifi.Statuses["0xbase"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx } };
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Empty(saved[^1]);
+    }
+
+    [Fact]
+    public void ReportedTransactionsReadBackWithBtcpaysSerializer()
+    {
+        var serializer = BlobSerializer.CreateSerializer().Serializer;
+        var since = DateTimeOffset.FromUnixTimeSeconds(1_790_000_000);
+        var details = JObject.FromObject(new SwapToBtcPromptDetails { ReportedSources = [new ReportedSource { TxHash = "0xbase", Since = since }] }, serializer);
+        var back = details.ToObject<SwapToBtcPromptDetails>(serializer)!;
+        Assert.Equal(since, Assert.Single(back.ReportedSources!).Since);
+    }
+
+    [Fact]
     public async Task ConfirmsByTheBtcPayoutWhenLifiShowsAPlaceholderReceiver()
     {
         var (verifier, lifi, logs, terms) = Verifier();
