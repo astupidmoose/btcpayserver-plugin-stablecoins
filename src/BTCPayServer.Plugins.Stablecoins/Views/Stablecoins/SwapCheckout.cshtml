@@ -18,11 +18,25 @@
 <template id="@SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName">
     <div class="payment-box stablecoins-swap" v-if="swap">
         <p class="text-center text-muted mb-3" v-if="swap.active">
-            Pay with any token you hold on {{ swap.chainName }}.
+            Pay with any token you hold on {{ current.name }}.
         </p>
         <div ref="panel" class="stablecoins-swap-panel"></div>
         <p v-if="state === 'loading'" class="text-center text-muted my-4">Loading wallet options…</p>
         <div v-if="state === 'error'" class="alert alert-danger mt-3" role="alert">The payment panel could not load: {{ error }}</div>
+        @* Any of the store's other token chains, paid into the same invoice. Locked once the wallet was asked to pay. *@
+        <div class="mt-3" v-if="swap.active && networks.length > 1 && !sent && !paying">
+            <div class="text-center" v-if="!picking">
+                <button type="button" class="btn btn-link btn-sm" v-on:click.prevent="picking = true">Pay from another network</button>
+            </div>
+            <div class="list-group stablecoins-networks" v-else>
+                <button type="button" v-for="n in networks" :key="n.chainId"
+                        class="list-group-item list-group-item-action d-flex align-items-center gap-2"
+                        :class="{ active: n.chainId === current.chainId }" v-on:click.prevent="useNetwork(n)">
+                    <img :src="n.image" alt="" width="24" height="24" class="flex-shrink-0">
+                    <span>{{ n.name }}</span>
+                </button>
+            </div>
+        </div>
         <stablecoins-exchange-buttons :model="model"></stablecoins-exchange-buttons>
     </div>
 </template>
@@ -85,6 +99,7 @@
 <style>
     .stablecoins-swap-panel { min-height: 3rem; }
     .stablecoins-tokens { max-height: 16rem; overflow-y: auto; }
+    .stablecoins-networks { max-height: 20rem; overflow-y: auto; }
 </style>
 
 <script>
@@ -159,10 +174,16 @@
             props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
             template: @Safe.Json("#" + SwapToBtcCheckoutModelExtension.CheckoutBodyComponentName),
             data () {
-                return { state: 'loading', error: null, mounted: null, panel: null, sent: false };
+                return { state: 'loading', error: null, mounted: null, panel: null, sent: false, paying: false, picking: false, chainId: null };
             },
             computed: {
-                swap () { return this.model.stablecoinsSwap; }
+                swap () { return this.model.stablecoinsSwap; },
+                networks () { return (this.swap && this.swap.networks) || []; },
+                // The network the panel pays from: this payment method's own until the customer picks another.
+                current () {
+                    const id = this.chainId || Number(this.swap.fromChain);
+                    return this.networks.find(n => n.chainId === id) || { chainId: Number(this.swap.fromChain), name: this.swap.chainName };
+                }
             },
             watch: {
                 // The panel quotes what is due; refresh it after a partial payment, but never once a payment was sent.
@@ -173,20 +194,33 @@
                 if (this.panel && this.$refs.panel) this.panel.unmount(this.$refs.panel);
             },
             methods: {
+                useNetwork (network) {
+                    this.picking = false;
+                    if (network.chainId === this.current.chainId) return;
+                    this.chainId = network.chainId;
+                    this.render();
+                },
                 async render () {
                     const swap = this.swap;
                     const btcDue = swap && swap.active ? btcToRequest(swap.btcDue, swap.bufferPercent) : null;
                     if (!btcDue) {
                         if (this.panel && this.$refs.panel) this.panel.unmount(this.$refs.panel);
+                        this.mounted = null;
                         this.state = 'idle';
                         return;
                     }
-                    const key = `${btcDue}:${swap.btcAddress}`;
+                    const fromChain = this.current.chainId;
+                    const key = `${btcDue}:${swap.btcAddress}:${fromChain}`;
                     if (this.mounted === key) return;
+                    this.mounted = key;
+                    this.state = 'loading';
                     try {
-                        const panel = await loadPanel(familyOf(Number(swap.fromChain)));
+                        const panel = await loadPanel(familyOf(fromChain));
+                        // Another network was picked while this one loaded.
+                        if (this.mounted !== key) return;
+                        // Each wallet family is its own bundle with its own React root: clear the old one first.
+                        if (this.panel && this.panel !== panel) this.panel.unmount(this.$refs.panel);
                         this.panel = panel;
-                        this.mounted = key;
                         panel.mount(this.$refs.panel, {
                             integrator: swap.integrator,
                             apiKey: swap.apiKey,
@@ -194,16 +228,20 @@
                             walletConnectProjectId: swap.walletConnectProjectId,
                             displayCurrency: swap.displayCurrency,
                             btcPrice: swap.btcPrice,
-                            fromChain: swap.fromChain,
+                            fromChain,
                             btcAddress: swap.btcAddress,
                             btcDue,
                             appearance: appearance(),
                             primaryColor: getComputedStyle(document.documentElement).getPropertyValue('--btcpay-primary').trim() || undefined,
                             onEvent: (kind, data) => {
+                                // While the wallet is asked to pay, switching networks would drop a transaction it may still send.
+                                if (kind === 'started') this.paying = true;
+                                if (kind === 'failed' || kind === 'completed') this.paying = false;
                                 // Before the customer signs: their wallet, so a payment can be traced even if the transaction is never reported.
                                 if (kind === 'started' && data && data.action && data.action.fromAddress) {
                                     const a = data.action, t = a.fromToken || {};
                                     reportSource(swap.sourceUrl, {
+                                        chainId: fromChain,
                                         fromAddress: a.fromAddress,
                                         token: t.symbol,
                                         amount: a.fromAmount && t.decimals != null ? formatUnits(a.fromAmount, t.decimals) : undefined
@@ -217,6 +255,7 @@
                         });
                         this.state = 'ready';
                     } catch (e) {
+                        this.mounted = null;
                         this.state = 'error';
                         this.error = e && e.message ? e.message : String(e);
                     }

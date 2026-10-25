@@ -18,10 +18,13 @@ public class SecurityTests
     class FakeLifi : HttpMessageHandler
     {
         public Dictionary<string, JObject> Statuses { get; } = new();
+        public List<string?> FromChains { get; } = new();
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            var hash = System.Web.HttpUtility.ParseQueryString(request.RequestUri!.Query)["txHash"]!;
+            var query = System.Web.HttpUtility.ParseQueryString(request.RequestUri!.Query);
+            var hash = query["txHash"]!;
+            FromChains.Add(query["fromChain"]);
             return Task.FromResult(Statuses.TryGetValue(hash, out var json)
                 ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json.ToString(), Encoding.UTF8, "application/json") }
                 : new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("""{"message":"not found"}""") });
@@ -193,7 +196,7 @@ public class SecurityTests
         var pmi = SwapSourceChain.PaymentMethods.First(c => c.Provider == SwapProvider.Lifi).PaymentMethodId;
         lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["toAddress"] = LifiPlaceholder };
 
-        await verifier.Report("inv", pmi, "Base", "0xbase", InvoiceAddress);
+        await verifier.Report("inv", pmi, SwapSourceChain.Find(pmi)!, "0xbase", InvoiceAddress);
         Assert.Equal("0xbase", Assert.Single(saved[^1]).TxHash);
         await verifier.CheckAll(CancellationToken.None);
         Assert.Single(saved);
@@ -218,10 +221,37 @@ public class SecurityTests
         var pmi = SwapSourceChain.PaymentMethods.First(c => c.Provider == SwapProvider.Lifi).PaymentMethodId;
         lifi.Statuses["0xbase"] = new JObject { ["status"] = "PENDING", ["toAddress"] = LifiPlaceholder };
 
-        await verifier.Report("inv", pmi, "Base", "0xbase", InvoiceAddress);
+        await verifier.Report("inv", pmi, SwapSourceChain.Find(pmi)!, "0xbase", InvoiceAddress);
         Assert.Empty(saved);
         await verifier.CheckAll(CancellationToken.None);
         Assert.Equal("0xbase", Assert.Single(Assert.Single(saved)).TxHash);
+    }
+
+    [Fact]
+    public async Task ChecksAPaymentFromAnotherNetworkOnTheNetworkItWasSentFrom()
+    {
+        // A Tron checkout whose customer switched to Solana: the check asks LI.FI about Solana and is saved with it.
+        var (verifier, lifi, logs, _) = Verifier();
+        var saved = new List<List<ReportedSource>>();
+        verifier.WriteReports = (_, _, reports) => { saved.Add(reports); return Task.CompletedTask; };
+        var tron = SwapSourceChain.Find("TRON")!;
+        var solana = SwapSourceChain.FindLifi(SwapSourceChain.SolanaLifiChainId)!;
+        lifi.Statuses["5solanatx"] = new JObject { ["status"] = "DONE", ["toAddress"] = LifiPlaceholder, ["receiving"] = new JObject { ["txHash"] = InvoicePayoutTx } };
+
+        await verifier.Report("inv", tron.PaymentMethodId, solana, "5solanatx", InvoiceAddress);
+        Assert.Equal(SwapSourceChain.SolanaLifiChainId, Assert.Single(saved[^1]).FromChainId);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(SwapSourceChain.SolanaLifiChainId.ToString(), Assert.Single(lifi.FromChains));
+        Assert.Contains(logs, l => l.StartsWith("LI.FI confirms the customer's Solana transaction"));
+    }
+
+    [Fact]
+    public void FindsTokenChainsByLifiChainId()
+    {
+        Assert.Equal("BASE", SwapSourceChain.FindLifi(8453)?.Code);
+        Assert.Equal("TRON", SwapSourceChain.FindLifi(SwapSourceChain.TronLifiChainId)?.Code);
+        Assert.Null(SwapSourceChain.FindLifi(999));
+        Assert.Null(SwapSourceChain.FindLifi(null));
     }
 
     [Fact]
@@ -229,9 +259,10 @@ public class SecurityTests
     {
         var serializer = BlobSerializer.CreateSerializer().Serializer;
         var since = DateTimeOffset.FromUnixTimeSeconds(1_790_000_000);
-        var details = JObject.FromObject(new SwapToBtcPromptDetails { ReportedSources = [new ReportedSource { TxHash = "0xbase", Since = since }] }, serializer);
+        var details = JObject.FromObject(new SwapToBtcPromptDetails { ReportedSources = [new ReportedSource { TxHash = "0xbase", Since = since, FromChainId = 8453 }] }, serializer);
         var back = details.ToObject<SwapToBtcPromptDetails>(serializer)!;
         Assert.Equal(since, Assert.Single(back.ReportedSources!).Since);
+        Assert.Equal(8453, back.ReportedSources![0].FromChainId);
     }
 
     [Fact]

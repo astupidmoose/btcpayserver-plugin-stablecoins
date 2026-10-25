@@ -100,6 +100,10 @@ public record SwapSourceChain
     public static SwapSourceChain? Find(PaymentMethodId? pmi) =>
         pmi is not null && ByPmi.TryGetValue(pmi, out var chain) ? chain : null;
 
+    /// <summary>A LI.FI payment method by its LI.FI chain id.</summary>
+    public static SwapSourceChain? FindLifi(long? lifiChainId) =>
+        lifiChainId is { } id ? PaymentMethods.FirstOrDefault(c => c.Provider == SwapProvider.Lifi && c.LifiChainId == id) : null;
+
     public static SwapSourceChain? Find(string? code) =>
         All.FirstOrDefault(c => c.Code.Equals(code, StringComparison.OrdinalIgnoreCase));
 }
