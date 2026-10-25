@@ -151,12 +151,13 @@ function Panel({ opts, client, chain }) {
         if (cancelled) return;
         setBalances(held);
         if (held.length) setToken(held[0]);
+        else opts.onEvent('unpayable', 'no tokens');
       } catch (e) {
         if (!cancelled) setBalanceError(errorText(e));
       }
     })();
     return () => { cancelled = true; };
-  }, [client, chain, address]);
+  }, [client, chain, address, opts]);
 
   // What the chosen token must be to deliver the BTC due. Refreshed while the customer decides.
   const requestQuote = useCallback(async () => {
@@ -176,9 +177,14 @@ function Panel({ opts, client, chain }) {
       });
       if (seq === quoteSeq.current) setQuote(q);
     } catch (e) {
-      if (seq === quoteSeq.current) { setQuote(null); setQuoteError(errorText(e)); }
+      if (seq === quoteSeq.current) {
+        setQuote(null);
+        setQuoteError(errorText(e));
+        // Lets the checkout offer the store's other networks.
+        opts.onEvent('unpayable', errorText(e));
+      }
     }
-  }, [client, chain, address, token, opts.btcAddress, opts.btcDue, opts.fee]);
+  }, [client, chain, address, token, opts]);
 
   useEffect(() => {
     setQuote(null);
