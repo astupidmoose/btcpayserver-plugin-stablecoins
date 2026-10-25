@@ -262,6 +262,8 @@
                         });
                         this.state = 'ready';
                     } catch (e) {
+                        // A load for a network the customer has since left must not touch the one they picked.
+                        if (this.mounted !== key) return;
                         this.mounted = null;
                         this.state = 'error';
                         this.error = e && e.message ? e.message : String(e);
