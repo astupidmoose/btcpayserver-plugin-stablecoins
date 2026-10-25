@@ -91,6 +91,8 @@ public class ReportedSource
     // BTCPay's serializer writes dates as unix seconds; this reads them back.
     [Newtonsoft.Json.JsonConverter(typeof(NBitcoin.JsonConverters.DateTimeToUnixTimeConverter))]
     public DateTimeOffset Since { get; set; }
+    /// <summary>The LI.FI chain the customer paid from; absent on checks saved before 0.11 (the payment method's own chain).</summary>
+    public long? FromChainId { get; set; }
 }
 
 /// <summary>

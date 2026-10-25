@@ -36,8 +36,12 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     /// <summary>Pending checks are bounded: beyond this, new reports are dropped (they are still in the log as unverified).</summary>
     public const int MaxPending = 2000;
 
-    /// <summary>PaymentMethodId is where the check is kept on the invoice; null for one that is only in memory (tests).</summary>
-    public record Pending(string InvoiceId, string ChainName, string TxHash, string BtcAddress, DateTimeOffset Since, PaymentMethodId? PaymentMethodId = null);
+    /// <summary>
+    /// PaymentMethodId is where the check is kept on the invoice; null for one that is only in memory (tests).
+    /// FromChainId is the LI.FI chain the customer paid from, which may be another than the payment method's.
+    /// </summary>
+    public record Pending(string InvoiceId, string ChainName, string TxHash, string BtcAddress, DateTimeOffset Since,
+        PaymentMethodId? PaymentMethodId = null, long? FromChainId = null);
 
     static readonly Newtonsoft.Json.JsonSerializer DetailsSerializer = BlobSerializer.CreateSerializer().Serializer;
 
@@ -99,20 +103,22 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
     }
 
     /// <summary>False when the hash is already being checked or the queue is full.</summary>
-    public bool Enqueue(string invoiceId, string chainName, string txHash, string btcAddress, PaymentMethodId? paymentMethodId = null, DateTimeOffset? since = null)
+    public bool Enqueue(string invoiceId, string chainName, string txHash, string btcAddress, PaymentMethodId? paymentMethodId = null,
+        DateTimeOffset? since = null, long? fromChainId = null)
     {
         if (_pending.Count >= MaxPending)
             return false;
-        return _pending.TryAdd(invoiceId + ":" + txHash.ToLowerInvariant(), new Pending(invoiceId, chainName, txHash, btcAddress, since ?? Now(), paymentMethodId));
+        return _pending.TryAdd(invoiceId + ":" + txHash.ToLowerInvariant(),
+            new Pending(invoiceId, chainName, txHash, btcAddress, since ?? Now(), paymentMethodId, fromChainId));
     }
 
     /// <summary>
     /// Checks a reported transaction and keeps the check on the invoice: the customer may close the page
     /// right after paying, so a restart must not lose it.
     /// </summary>
-    public async Task Report(string invoiceId, PaymentMethodId paymentMethodId, string chainName, string txHash, string btcAddress)
+    public async Task Report(string invoiceId, PaymentMethodId paymentMethodId, SwapSourceChain paidFrom, string txHash, string btcAddress)
     {
-        if (Enqueue(invoiceId, chainName, txHash, btcAddress, paymentMethodId))
+        if (Enqueue(invoiceId, paidFrom.Name, txHash, btcAddress, paymentMethodId, fromChainId: paidFrom.LifiChainId))
             await Save(invoiceId, paymentMethodId);
     }
 
@@ -143,7 +149,10 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
                 if (invoice.GetPaymentPrompt(chain.PaymentMethodId) is not { Details: { } details, Destination: { } btcAddress })
                     continue;
                 foreach (var r in details.ToObject<SwapToBtcPromptDetails>(DetailsSerializer)?.ReportedSources ?? [])
-                    Enqueue(invoice.Id, chain.Name, r.TxHash, btcAddress, chain.PaymentMethodId, r.Since);
+                {
+                    var paidFrom = SwapSourceChain.FindLifi(r.FromChainId) ?? chain;
+                    Enqueue(invoice.Id, paidFrom.Name, r.TxHash, btcAddress, chain.PaymentMethodId, r.Since, paidFrom.LifiChainId);
+                }
             }
             _toRestore.Remove(chain.PaymentMethodId);
         }
@@ -164,7 +173,7 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
         try
         {
             var reports = _pending.Values.Where(v => v.InvoiceId == invoiceId && v.PaymentMethodId == paymentMethodId)
-                .Select(v => new ReportedSource { TxHash = v.TxHash, Since = v.Since }).ToList();
+                .Select(v => new ReportedSource { TxHash = v.TxHash, Since = v.Since, FromChainId = v.FromChainId }).ToList();
             if (WriteReports is not null)
             {
                 await WriteReports(invoiceId, paymentMethodId, reports);
@@ -223,7 +232,7 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             LifiTransferStatus? status;
             try
             {
-                status = await lifi.Status(p.TxHash, cancellationToken);
+                status = await lifi.Status(p.TxHash, p.FromChainId, cancellationToken);
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {

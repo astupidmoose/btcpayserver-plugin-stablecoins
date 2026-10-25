@@ -66,16 +66,18 @@ public class UISwapCheckoutController(
         var invoice = await invoiceRepository.GetInvoice(invoiceId);
         if (invoice?.GetPaymentPrompt(pmi) is not { Activated: true, Destination: { } btcAddress })
             return NotFound();
+        // The customer may have switched to another network in the checkout ("Pay from another network").
+        var paidFrom = SwapSourceChain.FindLifi(body!.ChainId) ?? chain;
         // Anyone with the invoice id can call this, so what it records is marked as the customer's claim.
         // Only a transaction LI.FI confirms pays this invoice's address becomes searchable (SourceVerifier).
         if (from is not null)
         {
-            var paying = IsShortText(body!.Amount) && IsShortText(body.Token) ? $"{body.Amount} {body.Token}" : "tokens";
-            await Note(invoiceId, $"from:{from}", $"Customer-reported, unverified: started paying {paying} on {chain.Name} from wallet {from}.");
+            var paying = IsShortText(body.Amount) && IsShortText(body.Token) ? $"{body.Amount} {body.Token}" : "tokens";
+            await Note(invoiceId, $"from:{from}:{paidFrom.Code}", $"Customer-reported, unverified: started paying {paying} on {paidFrom.Name} from wallet {from}.");
         }
         if (txHash is not null &&
-            await Note(invoiceId, $"tx:{txHash}", $"Customer-reported, unverified: {chain.Name} transaction {txHash}. Checking it with LI.FI. Track it at https://scan.li.fi/tx/{txHash}"))
-            await verifier.Report(invoiceId, pmi, chain.Name, txHash, btcAddress);
+            await Note(invoiceId, $"tx:{txHash}", $"Customer-reported, unverified: {paidFrom.Name} transaction {txHash}. Checking it with LI.FI. Track it at https://scan.li.fi/tx/{txHash}"))
+            await verifier.Report(invoiceId, pmi, paidFrom, txHash, btcAddress);
         return Json(new { ok = true });
     }
 
