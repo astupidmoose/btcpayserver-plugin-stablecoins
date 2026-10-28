@@ -115,6 +115,15 @@ public class PegasusTests
             Added.Add((orderNumber, btc));
             return Task.FromResult(true);
         }
+        /// <summary>Whether the order's BTC is on the invoice.</summary>
+        public bool Paid { get; set; }
+        public List<string> RetiredPaid { get; } = new();
+        public Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated)
+        {
+            if (Paid)
+                RetiredPaid.Add(orderNumber);
+            return Task.FromResult(Paid);
+        }
         public Task<bool> Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason)
         {
             Calls++;
@@ -350,6 +359,26 @@ public class PegasusTests
         service.Now = () => DateTimeOffset.UtcNow.AddHours(25);
         await service.FollowAll(CancellationToken.None);
         Assert.Equal("O1", Assert.Single(pending.Retired));
+    }
+
+    [Fact]
+    public async Task APaidOutOrderRetiresItsPendingPaymentOnceTheBtcIsThere()
+    {
+        var pending = new FakePending();
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+        fake.Status = PegasusStatus.Success;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Single(pending.Added);
+        Assert.Empty(pending.RetiredPaid);
+
+        // The BTC arrived but the listener could not retire the pending payment: the next round does.
+        pending.Paid = true;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(2);
+        await service.FollowAll(CancellationToken.None);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.RetiredPaid));
     }
 
     [Fact]

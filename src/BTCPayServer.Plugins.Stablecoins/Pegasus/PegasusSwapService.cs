@@ -109,13 +109,15 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         public bool NeedsAdd => !PendingAdded && Received(Payment.Status) && !Abandoned;
         /// <summary>The order will not pay out: a pending payment recorded for it should stop counting.</summary>
         public bool NeedsRetire => PendingAdded && !PendingRetired && Abandoned;
+        /// <summary>The order paid out: once its BTC is on the invoice, the pending payment should stop counting.</summary>
+        public bool NeedsPayout => PendingAdded && !PendingRetired && !Abandoned && Payment.Status == PegasusStatus.Success;
         bool Abandoned => GaveUp || Payment.Status is PegasusStatus.Refund or PegasusStatus.Overdue;
         /// <summary>
         /// Nothing left to follow: no pending payment to record or retire, and the order is either past its follow time,
         /// retired, or finished without one. A paid-out order with a pending payment is kept until its follow time ends,
         /// in case the BTC never comes.
         /// </summary>
-        public bool Done => !NeedsAdd && !NeedsRetire && (GaveUp || PendingRetired || Final && !PendingAdded);
+        public bool Done => !NeedsAdd && !NeedsRetire && !NeedsPayout && (GaveUp || PendingRetired || Final && !PendingAdded);
     }
 
     class Entry
@@ -131,6 +133,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         public string? LoggedError;
         public Task? Running;
         public DateTimeOffset Touched;
+        /// <summary>The last save failed: <see cref="FollowAll"/> saves again, and the entry is kept until it succeeds.</summary>
+        public bool Unsaved;
     }
 
     readonly ConcurrentDictionary<string, Entry> _entries = new();
@@ -422,12 +426,13 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
     {
         if (pendingPayments is null)
             return false;
-        bool add, retire;
+        bool add, retire, payout;
         PegasusPayment payment;
         lock (entry)
         {
             add = swap.NeedsAdd;
             retire = swap.NeedsRetire;
+            payout = swap.NeedsPayout;
             payment = swap.Payment;
         }
         if (add && await pendingPayments.Add(entry.InvoiceId, entry.PaymentMethodId, payment.OrderNumber, payment.PendingBtc, payment.Created))
@@ -440,6 +445,13 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                 swap.GaveUp
                     ? $"Pegasus Swap order {payment.OrderNumber} has not paid out within {FollowFor.TotalHours:0} hours"
                     : $"Pegasus Swap order {payment.OrderNumber} is {PegasusStatus.Name(payment.Status)}"))
+        {
+            lock (entry)
+                swap.PendingRetired = true;
+            return true;
+        }
+        // Normally the listener retires it when the BTC lands; this catches a retirement that failed there.
+        if (payout && await pendingPayments.RetireIfPaid(entry.InvoiceId, entry.PaymentMethodId, payment.OrderNumber, payment.Created))
         {
             lock (entry)
                 swap.PendingRetired = true;
@@ -470,7 +482,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                     saved = true;
                 }
                 unsaved = entry.Swaps.Where(s => { lock (s.UnsavedTerms) return s.UnsavedTerms.Count > 0; }).ToArray();
-                unsynced = entry.Swaps.Where(s => !open.Contains(s) && (s.NeedsAdd || s.NeedsRetire)).ToArray();
+                unsynced = entry.Swaps.Where(s => !open.Contains(s) && (s.NeedsAdd || s.NeedsRetire || s.NeedsPayout)).ToArray();
+                saved |= entry.Unsaved;
             }
             foreach (var swap in unsaved)
                 saved |= await SearchTerms(entry.InvoiceId, swap);
@@ -563,6 +576,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         await gate.WaitAsync();
         try
         {
+            lock (entry)
+                entry.Unsaved = false;
             var invoice = await invoiceRepository.GetInvoice(entry.InvoiceId);
             if (invoice?.GetPaymentPrompt(entry.PaymentMethodId) is not { Details: { } details })
                 return;
@@ -588,7 +603,9 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not save the Pegasus Swap orders of invoice {InvoiceId}", entry.InvoiceId);
+            logger.LogWarning(ex, "Could not save the Pegasus Swap orders of invoice {InvoiceId}; trying again shortly", entry.InvoiceId);
+            lock (entry)
+                entry.Unsaved = true;
         }
         finally
         {
@@ -664,7 +681,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         {
             bool done;
             lock (entry)
-                done = now - entry.Touched > ForgetAfter && entry.Swaps.All(s => s.Done && UnsavedOf(s).Length == 0);
+                done = now - entry.Touched > ForgetAfter && !entry.Unsaved && entry.Swaps.All(s => s.Done && UnsavedOf(s).Length == 0);
             if (done)
                 _entries.TryRemove(key, out _);
         }
