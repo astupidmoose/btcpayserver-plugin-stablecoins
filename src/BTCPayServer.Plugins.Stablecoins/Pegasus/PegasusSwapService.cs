@@ -80,6 +80,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
     static readonly TimeSpan LimitsFor = TimeSpan.FromMinutes(30);
     /// <summary>Swaps kept per invoice: one per amount due (a partial payment asks a new one). Bounds what callers can make it ask.</summary>
     const int MaxSwapsPerInvoice = 6;
+    /// <summary>Orders created for one checkout before giving up on getting one that pays what is due.</summary>
+    const int MaxCreateAttempts = 3;
 
     static readonly Newtonsoft.Json.JsonSerializer DetailsSerializer = BlobSerializer.CreateSerializer().Serializer;
     static readonly Regex MinimumPattern = new(@"minimum amount[^\d]*([\d.,]+)", RegexOptions.IgnoreCase);
@@ -298,11 +300,14 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                 RefundAddress = refund
             };
             var tx = await client.Create(BaseUrl, keys, request, CancellationToken.None);
-            // The fixed rate can differ a little from the estimate: if the swap pays less than is due, ask once more for proportionally more.
-            if (tx.ReceiveAmount is > 0m and var paid && paid < btc)
+            // The fixed rate can differ a little from the estimate: while the order pays less than is due, ask again for
+            // proportionally more, a bounded number of times, and never show an order known to be short.
+            for (var attempt = 1; tx.ReceiveAmount is > 0m and var paid && paid < btc; attempt++)
             {
+                if (attempt >= MaxCreateAttempts)
+                    throw new PegasusException(null, $"Pegasus Swap order {tx.OrderNumber} would pay {paid} BTC, less than the {btc} due, after {attempt} tries");
                 await Log(entry.InvoiceId, $"Pegasus Swap order {tx.OrderNumber} would pay {paid} BTC, less than the {btc} due; asking again with more XMR.");
-                request.DepositAmount = RoundUp(deposit * btc / paid * 1.001m, AmountDecimals);
+                request.DepositAmount = RoundUp(request.DepositAmount * btc / paid * 1.001m, AmountDecimals);
                 tx = await client.Create(BaseUrl, keys, request, CancellationToken.None);
             }
             if (string.IsNullOrEmpty(tx.OrderNumber) || string.IsNullOrEmpty(tx.DepositAddress))

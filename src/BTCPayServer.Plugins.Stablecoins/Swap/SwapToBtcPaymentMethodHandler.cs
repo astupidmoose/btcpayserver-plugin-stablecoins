@@ -81,7 +81,10 @@ public class SwapToBtcPaymentMethodHandler(
         // Monero swaps have a minimum and maximum: an order outside them, or a store without keys, does not offer Monero at all.
         if (chain.Provider == SwapProvider.Pegasus && Network.NBitcoinNetwork.ChainName != ChainName.Mainnet)
             throw new PaymentMethodUnavailableException("Monero swaps pay mainnet BTC only");
-        if (chain.Provider == SwapProvider.Pegasus && context.InvoiceEntity.Type != InvoiceType.TopUp)
+        // A fixed-rate swap needs an amount: a top-up invoice has none.
+        if (chain.Provider == SwapProvider.Pegasus && context.InvoiceEntity.Type == InvoiceType.TopUp)
+            throw new PaymentMethodUnavailableException("Monero needs an invoice amount");
+        if (chain.Provider == SwapProvider.Pegasus)
         {
             var config = context.PaymentMethodConfig is { } token ? ParsePaymentMethodConfig(token) : new SwapToBtcPaymentMethodConfig();
             var pegasus = serviceProvider.GetRequiredService<Pegasus.PegasusSwapService>();

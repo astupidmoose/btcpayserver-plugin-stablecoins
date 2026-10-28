@@ -22,8 +22,11 @@ public class PegasusTests
         public List<JObject> Created { get; } = new();
         public int Status { get; set; } = PegasusStatus.New;
         public string? MinimumError { get; set; }
-        /// <summary>The created order pays this share of what the deposit is worth, to test the second ask.</summary>
+        /// <summary>The first orders created pay this share of what the deposit is worth, to test asking again.</summary>
         public decimal PayoutShare { get; set; } = 1m;
+        public int ShortOrders { get; set; } = 1;
+        /// <summary>Every order pays this much BTC, whatever is deposited (the rate keeps worsening).</summary>
+        public decimal? FixedPayout { get; set; }
         public bool SwapEstimateFields { get; set; }
         public const decimal BtcPerXmr = 0.004m;
 
@@ -58,7 +61,7 @@ public class PegasusTests
                 var body = JObject.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
                 Created.Add(body);
                 var deposit = body["depositAmount"]!.Value<decimal>();
-                json = Order(Created.Count, deposit, deposit * BtcPerXmr * PayoutShare, body["receiveAddress"]!.ToString());
+                json = Order(Created.Count, deposit, FixedPayout ?? deposit * BtcPerXmr * (Created.Count <= ShortOrders ? PayoutShare : 1m), body["receiveAddress"]!.ToString());
             }
             else if (path == "/api/private/get-transaction")
             {
@@ -199,6 +202,15 @@ public class PegasusTests
         Assert.Equal(2, fake.Created.Count);
         Assert.Equal("O2", status.Payment!.OrderNumber);
         Assert.True(status.Payment.Amount > 2.5m * 1.01m);
+    }
+
+    [Fact]
+    public async Task NeverShowsAnOrderThatStaysShort()
+    {
+        var (service, fake) = Create(new FakePegasus { FixedPayout = 0.0099m });
+        var status = await Ready(service, Config(), 0.01m);
+        Assert.Equal(PegasusState.Failed, status.State);
+        Assert.Equal(3, fake.Created.Count);
     }
 
     [Fact]
