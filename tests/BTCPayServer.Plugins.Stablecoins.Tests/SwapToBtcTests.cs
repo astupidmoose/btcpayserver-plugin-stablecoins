@@ -30,9 +30,9 @@ public class SwapToBtcTests
     }
 
     [Fact]
-    public void OnlyTokenChainsAreOffered()
+    public void OnlyTokenChainsAndMoneroAreOffered()
     {
-        Assert.All(SwapSourceChain.PaymentMethods, c => Assert.Equal(SwapProvider.Lifi, c.Provider));
+        Assert.All(SwapSourceChain.PaymentMethods, c => Assert.Contains(c.Provider, new[] { SwapProvider.Lifi, SwapProvider.Pegasus }));
         Assert.Equal(SwapSourceChain.All.Length, SwapSourceChain.All.Select(c => c.Code).Distinct().Count());
         Assert.Equal(SwapSourceChain.All.Length, SwapSourceChain.All.Select(c => c.Name).Distinct().Count());
     }

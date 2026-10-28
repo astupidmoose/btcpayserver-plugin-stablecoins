@@ -59,6 +59,9 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             RefundSolana = any.RefundSolana,
             RefundTron = any.RefundTron,
             IntentsSlippageBps = any.IntentsSlippageBps,
+            PegasusPublicKey = any.PegasusPublicKey,
+            PegasusSecret = any.PegasusSecret,
+            RefundMonero = any.RefundMonero,
             Chains = chains.Select(c => new SwapChainViewModel
             {
                 Code = c.Chain.Code,
@@ -89,20 +92,30 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             RefundEvm = Clean(vm.RefundEvm),
             RefundSolana = Clean(vm.RefundSolana),
             RefundTron = Clean(vm.RefundTron),
-            IntentsSlippageBps = vm.IntentsSlippageBps
+            IntentsSlippageBps = vm.IntentsSlippageBps,
+            PegasusPublicKey = Clean(vm.PegasusPublicKey),
+            PegasusSecret = Clean(vm.PegasusSecret),
+            RefundMonero = Clean(vm.RefundMonero)
         };
         foreach (var (field, message) in SwapToBtcPaymentMethodHandler.Validate(config))
             ModelState.AddModelError(field == nameof(config.Fee) ? nameof(vm.FeePercent) : field, message);
         var enabled = vm.Chains.Where(c => c.Enabled).Select(c => SwapSourceChain.Find(c.Code)).OfType<SwapSourceChain>().ToHashSet();
         var exchange = enabled.Where(c => c.Provider == SwapProvider.Intents).ToList();
         config.ExchangeOptions = exchange.Select(c => c.Code).ToArray();
-        config.Chains = enabled.Where(c => c.Provider == SwapProvider.Lifi).Select(c => c.Code).ToArray();
+        config.Chains = enabled.Where(c => c.Provider != SwapProvider.Intents).Select(c => c.Code).ToArray();
         config.Disabled = !vm.Enabled;
         foreach (var chain in exchange)
             if (!Intents.IntentsDepositService.Networks(chain, config).Any())
                 ModelState.AddModelError(nameof(vm.RefundEvm), $"Add at least one refund address to offer {chain.Name}: NEAR Intents returns payments it cannot swap there.");
         if (exchange.Count > 0 && !enabled.Any(c => c.Provider == SwapProvider.Lifi))
             ModelState.AddModelError(string.Empty, "USDC and USDT from an exchange are offered on the token checkouts: turn on at least one token chain (Ethereum, Base...).");
+        if (enabled.Any(c => c.Provider == SwapProvider.Pegasus))
+        {
+            if (config.PegasusPublicKey is null || config.PegasusSecret is null)
+                ModelState.AddModelError(nameof(vm.PegasusPublicKey), "Add your Pegasus Swap public and secret keys to offer Monero.");
+            if (config.RefundMonero is null)
+                ModelState.AddModelError(nameof(vm.RefundMonero), "Add an XMR refund address to offer Monero: Pegasus Swap returns payments it cannot swap there.");
+        }
         if (vm.Enabled && enabled.Count > 0 && !vm.HasBtcWallet)
             ModelState.AddModelError(string.Empty, "Set up the store's BTC on-chain wallet first: swapped BTC is paid into it.");
         if (!ModelState.IsValid)
@@ -123,6 +136,8 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
         var withoutKeys = Newtonsoft.Json.JsonConvert.DeserializeObject<SwapToBtcPaymentMethodConfig>(Newtonsoft.Json.JsonConvert.SerializeObject(config))!;
         withoutKeys.ApiKey = null;
         withoutKeys.IntentsApiKey = null;
+        withoutKeys.PegasusPublicKey = null;
+        withoutKeys.PegasusSecret = null;
         foreach (var chain in SwapSourceChain.PaymentMethods)
         {
             var handler = handlers[chain.PaymentMethodId];
@@ -203,6 +218,15 @@ public class SwapSettingsViewModel
 
     [Display(Name = "Refund address on Tron")]
     public string? RefundTron { get; set; }
+
+    [Display(Name = "Pegasus Swap public key")]
+    public string? PegasusPublicKey { get; set; }
+
+    [Display(Name = "Pegasus Swap secret key")]
+    public string? PegasusSecret { get; set; }
+
+    [Display(Name = "XMR refund address")]
+    public string? RefundMonero { get; set; }
 
     [Display(Name = "Stablecoin price tolerance (basis points)")]
     [Range(1, 1000)]

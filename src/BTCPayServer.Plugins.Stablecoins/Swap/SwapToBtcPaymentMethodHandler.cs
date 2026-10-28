@@ -20,8 +20,8 @@ namespace BTCPayServer.Plugins.Stablecoins.Swap;
 
 /// <summary>
 /// "Pay from chain X": a BTC payment method whose prompt is a fresh address from the
-/// store's own BTC wallet. The customer pays with tokens on chain X through LI.FI, and
-/// LI.FI's bridge delivers native BTC to that address. Nothing is custodied by the plugin.
+/// store's own BTC wallet. The customer pays with tokens on chain X through LI.FI (or with XMR through
+/// Pegasus Swap), and the swap delivers native BTC to that address. Nothing is custodied by the plugin.
 /// </summary>
 public class SwapToBtcPaymentMethodHandler(
     SwapSourceChain chain,
@@ -56,7 +56,8 @@ public class SwapToBtcPaymentMethodHandler(
         context.State = new Prepare
         {
             AccountDerivation = settings.AccountDerivation,
-            ReserveAddress = walletProvider.GetWallet(Network).ReserveAddressAsync(context.Store.Id, settings.AccountDerivation, $"lifi-{chain.Code.ToLowerInvariant()}")
+            ReserveAddress = walletProvider.GetWallet(Network).ReserveAddressAsync(context.Store.Id, settings.AccountDerivation,
+                $"{(chain.Provider == SwapProvider.Lifi ? "lifi" : "swap")}-{chain.Code.ToLowerInvariant()}")
         };
         return Task.CompletedTask;
     }
@@ -75,6 +76,21 @@ public class SwapToBtcPaymentMethodHandler(
             txOut.ScriptPubKey = new Key().GetScriptPubKey(prepare.AccountDerivation.ScriptPubKeyType());
             if (prompt.Calculate().Due < txOut.GetDustThreshold().ToDecimal(MoneyUnit.BTC))
                 throw new PaymentMethodUnavailableException("Amount below the BTC dust threshold");
+        }
+
+        // Monero swaps have a minimum and maximum: an order outside them, or a store without keys, does not offer Monero at all.
+        if (chain.Provider == SwapProvider.Pegasus && Network.NBitcoinNetwork.ChainName != ChainName.Mainnet)
+            throw new PaymentMethodUnavailableException("Monero swaps pay mainnet BTC only");
+        // A fixed-rate swap needs an amount: a top-up invoice has none.
+        if (chain.Provider == SwapProvider.Pegasus && context.InvoiceEntity.Type == InvoiceType.TopUp)
+            throw new PaymentMethodUnavailableException("Monero needs an invoice amount");
+        if (chain.Provider == SwapProvider.Pegasus)
+        {
+            var config = context.PaymentMethodConfig is { } token ? ParsePaymentMethodConfig(token) : new SwapToBtcPaymentMethodConfig();
+            var pegasus = serviceProvider.GetRequiredService<Pegasus.PegasusSwapService>();
+            using var timeout = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15));
+            if (await pegasus.Unavailable(context.Store.Id, config, prompt.Calculate().Due, timeout.Token) is { } reason)
+                throw new PaymentMethodUnavailableException(reason);
         }
 
         var reserved = await prepare.ReserveAddress;
@@ -128,8 +144,13 @@ public class SwapToBtcPaymentMethodHandler(
         if (config is null)
             validationContext.ModelState.AddModelError("config", "Invalid configuration");
         else
+        {
+            // BTCPay's API returns payment method configs: keys belong in the plugin's own settings page.
+            if (!string.IsNullOrEmpty(config.PegasusPublicKey) || !string.IsNullOrEmpty(config.PegasusSecret))
+                validationContext.ModelState.AddModelError(nameof(config.PegasusSecret), "Set the Pegasus Swap keys on the plugin's settings page, not in the payment method config.");
             foreach (var error in Validate(config))
                 validationContext.ModelState.AddModelError(error.Field, error.Message);
+        }
         return Task.CompletedTask;
     }
 
@@ -149,6 +170,8 @@ public class SwapToBtcPaymentMethodHandler(
             yield return (nameof(config.RefundSolana), "That does not look like a Solana address.");
         if (config.RefundTron is { Length: > 0 } tron && !AddressChecks.IsTronAddress(tron.Trim()))
             yield return (nameof(config.RefundTron), "A Tron address starts with T and has 34 characters.");
+        if (config.RefundMonero is { Length: > 0 } xmr && !AddressChecks.IsMoneroAddress(xmr.Trim()))
+            yield return (nameof(config.RefundMonero), "That does not look like a Monero mainnet address (95 characters starting with 4 or 8, checksum included).");
         if (config.IntentsSlippageBps is < 1 or > 1000)
             yield return (nameof(config.IntentsSlippageBps), "The price tolerance must be between 1 and 1000 basis points.");
     }

@@ -17,14 +17,15 @@ namespace BTCPayServer.Plugins.Stablecoins.Swap;
 
 /// <summary>
 /// A plain BIP21 link for API clients (Greenfield's paymentLink). Any BTC sent to the address
-/// counts toward the invoice, swapped or not.
+/// counts toward the invoice, swapped or not. None for Monero, which must go through the checkout.
 /// </summary>
 public class SwapToBtcPaymentLinkExtension(SwapToBtcPaymentMethodHandler handler) : IPaymentLinkExtension
 {
     public PaymentMethodId PaymentMethodId => handler.PaymentMethodId;
 
+    // Monero has no direct link: the XMR address and amount exist only once the checkout has made the swap.
     public string? GetPaymentLink(PaymentPrompt prompt, IUrlHelper? urlHelper) =>
-        prompt.Destination is null
+        prompt.Destination is null || handler.Chain.Provider == SwapProvider.Pegasus
             ? null
             : handler.Network.GenerateBIP21(prompt.Destination, prompt.Calculate().Due).ToString();
 }

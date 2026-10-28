@@ -38,6 +38,12 @@ public class SwapToBtcPaymentMethodConfig
     public int IntentsSlippageBps { get; set; } = SwapDefaults.IntentsSlippageBps;
     /// <summary>The exchange options switched on (USDC, USDT), offered on the token checkouts. Not payment methods.</summary>
     public string[] ExchangeOptions { get; set; } = [];
+    /// <summary>Pegasus Swap partner API keys, for Monero. Stay on the server, in the store setting only, like <see cref="ApiKey"/>.</summary>
+    public string? PegasusPublicKey { get; set; }
+    public string? PegasusSecret { get; set; }
+    /// <summary>The store's own XMR address, where Pegasus Swap returns a Monero payment it could not swap.</summary>
+    public string? RefundMonero { get; set; }
+
     /// <summary>The store turned the whole feature off: no chain is offered, but the choices below are kept.</summary>
     public bool Disabled { get; set; }
     /// <summary>The token chains (codes) the store picked, remembered while the feature is off.</summary>
@@ -80,6 +86,8 @@ public class SwapToBtcPromptDetails
     public long FromChainId { get; set; }
     /// <summary>Every NEAR Intents deposit quoted for this checkout, followed until settled (also after a restart).</summary>
     public List<Intents.PersistedQuote>? IntentsQuotes { get; set; }
+    /// <summary>Every Pegasus Swap order made for this checkout (Monero), followed until settled (also after a restart).</summary>
+    public List<Pegasus.PersistedPegasusSwap>? PegasusSwaps { get; set; }
     /// <summary>Source transactions customers reported that LI.FI has not settled yet (also checked after a restart).</summary>
     public List<ReportedSource>? ReportedSources { get; set; }
 }
@@ -96,7 +104,7 @@ public class ReportedSource
 }
 
 /// <summary>
-/// Stored on each payment: the BTC output that LI.FI's bridge delivered.
+/// Stored on each payment: the BTC output that the swap delivered.
 /// </summary>
 public class SwapToBtcPaymentData
 {
@@ -105,4 +113,9 @@ public class SwapToBtcPaymentData
     public long ConfirmationCount { get; set; }
     public bool RBF { get; set; }
     public string? KeyPath { get; set; }
+    /// <summary>
+    /// Set on a placeholder for BTC a Monero swap will pay (no outpoint): the Pegasus Swap order number.
+    /// See <see cref="Pegasus.PendingPayments"/>.
+    /// </summary>
+    public string? PendingOrder { get; set; }
 }
