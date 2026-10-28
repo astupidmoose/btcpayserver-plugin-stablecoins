@@ -8,6 +8,7 @@ Each source chain is its own BTCPay payment method, so any checkout that lists B
 |---|---|---|
 | **LI.FI** (tokens from a wallet) | Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Solana, Tron | Connects their wallet in the [LI.FI](https://li.fi) panel, picks any token, signs once. A bridge delivers BTC. |
 | **NEAR Intents** (USDC, USDT from an exchange) | On each token checkout's own chain, where NEAR Intents takes the coin: USDC on Ethereum, Base, Arbitrum, Polygon, Solana, BNB Smart Chain, Avalanche, Optimism; USDT on Ethereum, Tron, BNB Smart Chain, Solana, Polygon, Arbitrum, Avalanche | Not a payment method of its own: "Send USDC from an exchange" buttons under the LI.FI panel. The customer sends an exact amount on that chain to a one-time deposit address from the [1Click API](https://github.com/defuse-protocol/one-click-sdk-typescript) (an exact-output quote for the BTC due, to the invoice's address). NEAR Intents holds the deposit until its solvers swap it; anything it cannot swap, and any excess, goes to the store's refund address for that network. Needs a 1Click API key. |
+| **Pegasus Swap** (Monero) | Monero | Its own payment method (`PEGASUS_MONERO`), shown as a normal Monero invoice: an XMR amount, a QR code and a one-time address. Behind it, each invoice gets a fixed-rate [Pegasus Swap](https://pegasusswap.com/api-docs) order that pays the BTC due to the invoice's address. Pegasus Swap holds the XMR until the swap runs; XMR it cannot swap goes to the store's XMR refund address. Needs Pegasus Swap partner API keys. |
 
 ## What it adds
 
@@ -18,6 +19,7 @@ Each source chain is its own BTCPay payment method, so any checkout that lists B
 | Listener: credits BTC delivered to those addresses, tracks confirmations | `Swap/SwapToBtcListener.cs` |
 | Checkout: BTCPay's own checkout with the LI.FI panel, or the exchange deposit address | `Swap/SwapToBtcCheckout.cs`, `Views/Stablecoins/SwapCheckout.cshtml` |
 | NEAR Intents deposits: quote, follow the deposit | `Intents/` |
+| Pegasus Swap orders and the Monero checkout | `Pegasus/`, `Views/Stablecoins/MoneroCheckout.cshtml` |
 | Checkout endpoints: exchange option, customer transaction reporting | `Controllers/UISwapCheckoutController.cs` |
 | Wallet payment panel (LI.FI SDK), one bundle per wallet family (EVM, Solana, Tron) | `client/` → `Resources/js/swappanel-*.js` |
 | Store settings page (Wallets → Other Chains), with an on/off switch for the whole feature | `Controllers/UISwapStoreController.cs`, `Views/Stablecoins/SwapSettings.cshtml` |
@@ -32,6 +34,7 @@ Payment method ids use underscores, not dashes: some store integrations send the
    - **Wallet:** the customer connects a wallet, picks one of the tokens they hold on that chain, and sees one locked amount ("Pay 0.004124 ETH"): an exact-output LI.FI quote for the BTC due, including every swap and bridge fee. BTC and the swap route are never shown.
    - **Another network:** "Pay from another network" switches the wallet panel to any other chain the store accepts, on the same invoice and into the same BTC address (useful when a chain has no route for the amount). The invoice log records the chain the customer actually paid from. It is locked once the wallet has been asked to pay.
    - **From an exchange:** the checkout looks like a normal coin invoice: amount in USDC or USDT, QR code, address. NEAR Intents' temporary minimums are respected: below a minimum it recently refused, the buttons are hidden for that chain.
+   - **Monero:** when the invoice is created, the server asks Pegasus Swap for an estimate; an order outside its minimum or maximum does not offer Monero. When the checkout opens, it creates a fixed-rate order (XMR in, the BTC due out to the invoice's address, the store's XMR refund address) and shows its deposit address and XMR amount, with a `monero:` payment link in the QR code. If the order would pay less BTC than due, it asks once more with proportionally more XMR. An overdue order is replaced by a new one the next time the checkout loads.
 3. BTC arrives at the invoice address. BTCPay's NBXplorer connection already watches the store's wallet; the listener records the payment under the chain's payment method. BTCPay's own Bitcoin listener only credits `BTC-CHAIN` addresses, so nothing is counted twice. On every block the listener also rescans the wallet's coins, which catches anything that arrived while BTCPay was down.
 4. Confirmations follow the store's speed policy, as for on-chain BTC. Partial payments, overpayments, expiry and paid-late work as BTCPay normally does, and the checkout re-quotes whatever is still due.
 
@@ -40,12 +43,14 @@ Payment method ids use underscores, not dashes: some store integrations send the
 - **Too little BTC arrives:** the invoice is partially paid and the checkout quotes the rest. If it expires that way, refund the partial amount with BTCPay's Refund button.
 - **A LI.FI route fails:** the bridge returns the funds to the customer's wallet on the source chain.
 - **An exchange deposit NEAR Intents cannot swap** (too little, too late): it goes to the store's refund address on that network; refund the customer from there.
+- **A Monero payment Pegasus Swap cannot swap:** it goes to the store's XMR refund address; refund the customer from there. An order that is held up (error, pause, stuck) is logged as a warning; contact Pegasus Swap with the order number.
 - **Late BTC:** recorded as paid late, like late on-chain BTC.
 
 For support, the invoice log records:
 
 - **Wallet payments:** what the customer's browser reports when they press pay (wallet address, token, amount) and each transaction they sign, marked "Customer-reported, unverified". The server then asks LI.FI about each transaction hash: once LI.FI's BTC payout for it is a transaction this invoice received (and, when LI.FI reports the amount, the exact output, since LI.FI can pay several swaps in one transaction), the log says so and the wallet address and transaction hashes are added to the invoice's search terms. A swap LI.FI reports as failed, or whose BTC never reaches the invoice, is logged as a warning. These checks are saved with the invoice and resume after a restart.
 - **Exchange payments:** each NEAR Intents quote (deposit address, amount, deadline, refund address, quote id), its status changes, why a quote failed, the customer's deposit transaction and NEAR Intents' BTC payout transaction. Quotes are saved with the invoice and followed by the server until they settle, even after the customer closes the checkout or BTCPay restarts. The deposit address, quote id and transaction hashes are added to the search terms.
+- **Monero payments:** each Pegasus Swap order (order number, deposit address, XMR amount, BTC amount, refund address), every status change, why an order failed, the customer's XMR deposit transaction and Pegasus Swap's BTC payout transaction. Orders are saved with the invoice and followed for up to a day, also after a restart. The order number, deposit address and transaction ids are added to the search terms.
 
 Pasting whatever the customer sends you (their wallet, a transaction hash, the address they paid) into the Invoices search finds the invoice once the provider has confirmed it. Unverified reports are in the invoice log only.
 
@@ -56,6 +61,7 @@ Pasting whatever the customer sends you (their wallet, a transaction hash, the a
 - LI.FI: integrator name (from [portal.li.fi](https://portal.li.fi)), optional API key, integrator fee (default 0). LI.FI's key is sent to the customer's browser, as LI.FI requires, so only set one if you hit rate limits.
 - WalletConnect project ID (optional): lets customers connect a mobile EVM wallet by scanning a QR code; browser wallets work without it. To get one, sign up free at [Reown](https://cloud.reown.com) (formerly WalletConnect Cloud), create a project, copy its Project ID into this field, and add your BTCPay domain (for example `btcpay.example.com`) to the project's allowed domains.
 - NEAR Intents: 1Click API key, refund addresses (EVM, Solana, Tron), price tolerance (default 50 bps). The 1Click key stays on the server.
+- Pegasus Swap: public and secret API keys, and an XMR refund address (checked as a Monero mainnet address). The keys stay on the server. If the store also has BTCPay's own Monero payment method, turn it off so customers see one Monero option.
 
 API keys are shown on the settings page only to people who can change the store settings (hidden until revealed). They are kept only in the plugin's own store setting, never in the payment method settings that BTCPay's API returns.
 - Amount buffer: extra BTC asked from the customer (default 0). Leave it at 0 and set the store's payment tolerance to about 1% to absorb small shortfalls yourself.
@@ -64,7 +70,7 @@ Also set a longer invoice expiry (for example 60 minutes): swaps to BTC usually 
 
 ## Privacy and third parties
 
-On a checkout that offers these payment methods, the customer's browser talks to LI.FI (li.quest), the chain's public RPC endpoints, and, when a mobile wallet connects by QR code, WalletConnect/Reown relays. Wallet addresses and amounts are visible to them, as with any wallet payment. The BTCPay server talks to LI.FI (transaction status) and NEAR Intents' 1Click API (quotes and status). Nothing is sent anywhere else.
+On a checkout that offers these payment methods, the customer's browser talks to LI.FI (li.quest), the chain's public RPC endpoints, and, when a mobile wallet connects by QR code, WalletConnect/Reown relays. Wallet addresses and amounts are visible to them, as with any wallet payment. The BTCPay server talks to LI.FI (transaction status), NEAR Intents' 1Click API (quotes and status) and, for Monero, Pegasus Swap's API (estimates, orders and status). Nothing is sent anywhere else.
 
 ## Build, test, package
 
@@ -78,7 +84,7 @@ dotnet test --project tests/BTCPayServer.Plugins.Stablecoins.Tests/BTCPayServer.
 
 The panel bundles are committed. To rebuild them: `cd client && npm ci && npm run build`. Dependencies are pinned to exact versions, and the build stops if `npm audit` reports a high-severity issue in a runtime dependency, apart from the ones `client/audit.mjs` accepts with its reason.
 
-For local testing against a fake 1Click server, set `BTCPAY_STABLECOINS_ONECLICK_URL`.
+For local testing against fake servers, set `BTCPAY_STABLECOINS_ONECLICK_URL` (1Click) and `BTCPAY_STABLECOINS_PEGASUS_URL` (Pegasus Swap).
 
 To make an installable package the same way the [Plugin Builder](https://plugin-builder.btcpayserver.org/) does:
 
@@ -91,7 +97,8 @@ Upload the resulting `.btcpay` file under Server Settings → Plugins → Upload
 
 ## Known limits
 
-- **Not yet run end to end on mainnet.** LI.FI and NEAR Intents are faked in the local tests.
+- **Not yet run end to end on mainnet.** LI.FI, NEAR Intents and Pegasus Swap are faked in the local tests.
+- **Pegasus Swap** does not document its fees, how long a fixed rate holds, or which response field carries which amount when the BTC amount is given. The plugin reads the XMR amount from whichever side is not the BTC, and checks the order's BTC amount against what is due.
 - **NEAR Intents minimums** change over time ($1,000 on BNB Smart Chain and $100 on Tron on 2026-10-16), which rules out small orders on those chains while they last.
 - **Refunds** use BTCPay's own refund flow (BTC). Address screening is not built.
 
