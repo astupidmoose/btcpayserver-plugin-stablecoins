@@ -19,10 +19,7 @@
             <div v-else-if="d.state === 'failed'" class="alert alert-warning small mb-0" role="alert">{{ d.error }}</div>
         </div>
         <template v-if="d && d.state === 'ready'">
-            <div class="alert alert-warning small mb-3" role="note">
-                Send exactly this amount of <strong>XMR</strong> in one payment. If your exchange takes its withdrawal fee out of the amount, add the fee.
-                <span v-if="d.memo"><br>Memo: <strong>{{ d.memo }}</strong></span>
-            </div>
+            <div v-if="d.memo" class="alert alert-warning small mb-3" role="note">Payment ID: <strong>{{ d.memo }}</strong></div>
             <component :is="'@SwapToBtcCheckoutModelExtension.BitcoinCheckoutBodyComponentName'" :model="model"></component>
         </template>
     </div>
@@ -37,15 +34,18 @@
             computed: {
                 d () { return this.model.@MoneroCheckoutModelExtension.DataKey; }
             },
-            // The address is prepared and the swap followed in the background; ask for the updated invoice while needed.
+            // The address is prepared and the swap followed in the background; ask for the updated invoice while needed,
+            // every second while the address is on its way so it shows as soon as it is ready.
             mounted () {
-                this.timer = setInterval(() => {
+                const tick = () => {
                     const state = this.d && this.d.state;
                     if (state && state !== 'done' && this.$root && this.$root.fetchData)
                         this.$root.fetchData();
-                }, 5000);
+                    this.timer = setTimeout(tick, this.d && this.d.state === 'preparing' ? 1000 : 5000);
+                };
+                this.timer = setTimeout(tick, 1000);
             },
-            beforeDestroy () { clearInterval(this.timer); }
+            beforeDestroy () { clearTimeout(this.timer); }
         });
     })();
 </script>

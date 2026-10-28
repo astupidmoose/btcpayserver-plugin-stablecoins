@@ -73,11 +73,10 @@ public class MoneroCheckoutModelExtension(
 
         // Same layout as a coin invoice: the amount in XMR on top, then the QR code and the address.
         var perBtc = payment.Amount / accounting.Due;
-        var places = PegasusSwapService.AmountDecimals;
         model.PaymentMethodCurrency = chain.Ticker;
-        model.Due = SwapToBtcCheckoutModelExtension.Format(payment.Amount, places);
-        model.Paid = accounting.Paid > 0m ? SwapToBtcCheckoutModelExtension.Format(accounting.Paid * perBtc, places) : "0";
-        model.OrderAmount = SwapToBtcCheckoutModelExtension.Format(payment.Amount + (accounting.Paid > 0m ? accounting.Paid * perBtc : 0m), places);
+        model.Due = Xmr(payment.Amount);
+        model.Paid = accounting.Paid > 0m ? Xmr(accounting.Paid * perBtc) : "0";
+        model.OrderAmount = Xmr(payment.Amount + (accounting.Paid > 0m ? accounting.Paid * perBtc : 0m));
         if (rate > 0m)
             model.Rate = displayFormatter.Currency(rate / perBtc, invoice.Currency, DisplayFormatter.CurrencyFormat.Symbol);
         model.Address = payment.Address;
@@ -88,4 +87,8 @@ public class MoneroCheckoutModelExtension(
         model.ShowPayInWalletButton = true;
         data["memo"] = payment.Memo;
     }
+
+    /// <summary>XMR with all 12 decimals, as BTCPay's own Monero checkout shows it.</summary>
+    public static string Xmr(decimal amount) =>
+        PegasusSwapService.RoundUp(amount, 12).ToString("0.000000000000", CultureInfo.InvariantCulture);
 }

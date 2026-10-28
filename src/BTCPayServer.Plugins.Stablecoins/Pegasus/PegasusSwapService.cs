@@ -135,6 +135,12 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
 
     readonly ConcurrentDictionary<string, Entry> _entries = new();
     (string Deposit, string Receive, DateTimeOffset At)? _networks;
+    /// <summary>
+    /// The estimate asked at invoice creation, per store and BTC amount, reused when the checkout opens soon after so the
+    /// address shows sooner. Only the XMR amount comes from it: every order made is still checked to pay what is due.
+    /// </summary>
+    readonly ConcurrentDictionary<(string Store, decimal Btc), (PegasusEstimate Estimate, DateTimeOffset At)> _estimates = new();
+    static readonly TimeSpan EstimateFor = TimeSpan.FromMinutes(2);
     /// <summary>Per store: the smallest BTC amount refused as too small and the largest refused as too large, and when.</summary>
     readonly ConcurrentDictionary<string, (decimal? Below, decimal? Above, DateTimeOffset At)> _limits = new();
 
@@ -179,7 +185,11 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         try
         {
             var (deposit, receive) = await Networks(keys, cancellationToken);
-            await client.Estimate(BaseUrl, keys, DepositCoin, deposit, ReceiveCoin, receive, target, "receive", cancellationToken);
+            var estimate = await client.Estimate(BaseUrl, keys, DepositCoin, deposit, ReceiveCoin, receive, target, "receive", cancellationToken);
+            foreach (var (key, old) in _estimates.ToArray())
+                if (now - old.At >= EstimateFor)
+                    _estimates.TryRemove(key, out _);
+            _estimates[(storeId, target)] = (estimate, now);
             return null;
         }
         catch (PegasusException ex) when (ex.Status == 400 && Limit(ex.Message) is { } limit)
@@ -307,7 +317,9 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             var refund = config.RefundMonero?.Trim() is { Length: > 0 } r ? r : throw new PegasusException(null, "No XMR refund address is set");
             var (depositNetwork, receiveNetwork) = await Networks(keys, CancellationToken.None);
             var btc = target / 100_000_000m;
-            var estimate = await client.Estimate(BaseUrl, keys, DepositCoin, depositNetwork, ReceiveCoin, receiveNetwork, btc, "receive", CancellationToken.None);
+            var estimate = _estimates.TryRemove((entry.StoreId, btc), out var cached) && Now() - cached.At < EstimateFor
+                ? cached.Estimate
+                : await client.Estimate(BaseUrl, keys, DepositCoin, depositNetwork, ReceiveCoin, receiveNetwork, btc, "receive", CancellationToken.None);
             var xmr = DepositFromEstimate(estimate, btc) ??
                       throw new PegasusException(null, $"Unexpected estimate for {btc} BTC: amount {estimate.Amount}, receive {estimate.Receive}");
             var deposit = RoundUp(xmr, AmountDecimals);

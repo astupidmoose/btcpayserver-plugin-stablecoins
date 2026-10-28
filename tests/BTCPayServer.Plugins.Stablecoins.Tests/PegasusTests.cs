@@ -265,6 +265,28 @@ public class PegasusTests
     }
 
     [Fact]
+    public async Task TheCheckoutReusesTheEstimateFromInvoiceCreation()
+    {
+        var (service, fake) = Create();
+        Assert.Null(await service.Unavailable("store1", Config(), 0.01m, CancellationToken.None));
+        var status = await Ready(service, Config(), 0.01m);
+        Assert.Equal(PegasusState.Ready, status.State);
+        Assert.Single(fake.Requests, r => r.RequestUri!.AbsolutePath == "/api/private/exchange-coin");
+
+        // Used once: a later order for the same amount asks again.
+        Assert.Equal("O1", status.Payment!.OrderNumber);
+        await Ready(service, Config(), 0.01m, "inv2");
+        Assert.Equal(2, fake.Requests.Count(r => r.RequestUri!.AbsolutePath == "/api/private/exchange-coin"));
+    }
+
+    [Fact]
+    public void ShowsXmrWithAllTwelveDecimals()
+    {
+        Assert.Equal("0.018727000000", MoneroCheckoutModelExtension.Xmr(0.018727m));
+        Assert.Equal("0.000000000001", MoneroCheckoutModelExtension.Xmr(0.0000000000001m));
+    }
+
+    [Fact]
     public async Task AFailedPendingPaymentWriteIsTriedAgain()
     {
         var pending = new FakePending { Failures = 2 };
