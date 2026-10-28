@@ -97,10 +97,26 @@ public class PegasusTests
         RefundMonero = XmrAddress
     };
 
-    static (PegasusSwapService Service, FakePegasus Fake) Create(FakePegasus? fake = null)
+    class FakePending : IPendingPayments
+    {
+        public List<(string Order, decimal Btc)> Added { get; } = new();
+        public List<string?> Retired { get; } = new();
+        public Task Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc)
+        {
+            Added.Add((orderNumber, btc));
+            return Task.CompletedTask;
+        }
+        public Task Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason)
+        {
+            Retired.Add(orderNumber);
+            return Task.CompletedTask;
+        }
+    }
+
+    static (PegasusSwapService Service, FakePegasus Fake) Create(FakePegasus? fake = null, IPendingPayments? pending = null)
     {
         fake ??= new FakePegasus();
-        var service = new PegasusSwapService(new PegasusClient(new HttpClient(fake)), null!, NullLogger<PegasusSwapService>.Instance)
+        var service = new PegasusSwapService(new PegasusClient(new HttpClient(fake)), null!, NullLogger<PegasusSwapService>.Instance, null, pending)
         {
             BaseUrl = new Uri("https://pegasus.example.com")
         };
@@ -200,6 +216,49 @@ public class PegasusTests
 
         // Even if the amount due changes meanwhile (a partial payment landed), the swap on its way stays on screen.
         Assert.Equal("O1", service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.005m).Payment!.OrderNumber);
+    }
+
+    [Fact]
+    public async Task AReceivedDepositIsAPendingPaymentUntilRefunded()
+    {
+        var pending = new FakePending();
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+
+        fake.Status = PegasusStatus.Confirmation;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal(("O1", 0.01m), Assert.Single(pending.Added));
+
+        // Later stages of the same order add nothing more.
+        fake.Status = PegasusStatus.Exchanging;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(2);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Single(pending.Added);
+        Assert.Empty(pending.Retired);
+
+        fake.Status = PegasusStatus.Refund;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(3);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.Retired));
+    }
+
+    [Fact]
+    public async Task AnOrderThatNeverPaysOutStopsHoldingTheInvoice()
+    {
+        var pending = new FakePending();
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+        fake.Status = PegasusStatus.Stuck;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Single(pending.Added);
+        Assert.Empty(pending.Retired);
+
+        service.Now = () => DateTimeOffset.UtcNow.AddHours(25);
+        await service.FollowAll(CancellationToken.None);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.Retired));
     }
 
     [Fact]

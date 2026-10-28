@@ -113,4 +113,9 @@ public class SwapToBtcPaymentData
     public long ConfirmationCount { get; set; }
     public bool RBF { get; set; }
     public string? KeyPath { get; set; }
+    /// <summary>
+    /// Set on a placeholder for BTC a Monero swap will pay (no outpoint): the Pegasus Swap order number.
+    /// See <see cref="Pegasus.PendingPayments"/>.
+    /// </summary>
+    public string? PendingOrder { get; set; }
 }

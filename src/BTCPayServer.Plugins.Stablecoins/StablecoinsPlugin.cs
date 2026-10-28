@@ -48,6 +48,7 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
         services.AddHttpClient(Pegasus.PegasusClient.HttpClientName);
         services.AddSingleton(provider => new Pegasus.PegasusClient(
             provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(Pegasus.PegasusClient.HttpClientName)));
+        services.AddSingleton<Pegasus.IPendingPayments, Pegasus.PendingPayments>();
         services.AddSingleton<Pegasus.PegasusSwapService>();
         services.AddHostedService<Pegasus.PegasusTracker>();
 

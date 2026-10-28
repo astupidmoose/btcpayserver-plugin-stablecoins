@@ -26,7 +26,12 @@ public record PegasusPayment(
     long TargetSats,
     int Status,
     DateTimeOffset Created,
-    DateTimeOffset CheckedAt);
+    DateTimeOffset CheckedAt,
+    decimal? ReceiveBtc = null)
+{
+    /// <summary>What the pending payment is recorded as: the order's BTC, or what was asked for.</summary>
+    public decimal PendingBtc => ReceiveBtc is > 0m and var r ? r : TargetSats / 100_000_000m;
+}
 
 public enum PegasusState { Preparing, Ready, Received, Refunded, Failed }
 
@@ -40,6 +45,8 @@ public class PersistedPegasusSwap
     public string? Memo { get; set; }
     public string Amount { get; set; } = "0";
     public long TargetSats { get; set; }
+    /// <summary>The BTC the order pays, as the exchange stated it.</summary>
+    public string? ReceiveBtc { get; set; }
     public int Status { get; set; } = PegasusStatus.New;
     // BTCPay's serializer writes dates as unix seconds; this reads them back.
     [Newtonsoft.Json.JsonConverter(typeof(NBitcoin.JsonConverters.DateTimeToUnixTimeConverter))]
@@ -54,7 +61,7 @@ public class PersistedPegasusSwap
 /// The BTC itself is credited by <see cref="SwapToBtcListener"/> when it reaches the address, like every other swap.
 /// </summary>
 public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceRepository, ILogger<PegasusSwapService> logger,
-    SwapSecrets? secrets = null)
+    SwapSecrets? secrets = null, IPendingPayments? pendingPayments = null)
 {
     public const string DepositCoin = "xmr";
     public const string ReceiveCoin = "btc";
@@ -83,6 +90,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         public required PegasusPayment Payment;
         public readonly HashSet<string> LoggedTxs = new(StringComparer.OrdinalIgnoreCase);
         public bool Final => Payment.Status is PegasusStatus.Success or PegasusStatus.Refund;
+        /// <summary>No longer followed: its pending payment, if any, was retired.</summary>
+        public bool GaveUp;
     }
 
     class Entry
@@ -218,6 +227,9 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
     static bool InProgress(int status) => status is PegasusStatus.Confirmation or PegasusStatus.Exchanging or PegasusStatus.Sending
         or PegasusStatus.Error or PegasusStatus.Pause or PegasusStatus.Stuck;
 
+    /// <summary>The exchange has the customer's XMR (or already paid out).</summary>
+    static bool Received(int status) => InProgress(status) || status == PegasusStatus.Success;
+
     static PegasusSwapStatus StatusOf(PegasusPayment payment) => payment.Status switch
     {
         PegasusStatus.New => new(PegasusState.Ready, payment, null),
@@ -299,7 +311,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                 throw new PegasusException(null, $"The swap pays {to}, not this invoice's address {btcAddress}");
             var amount = tx.DepositAmount is > 0m and var a ? RoundUp(a, AmountDecimals) : request.DepositAmount;
             var now = Now();
-            var payment = new PegasusPayment(tx.OrderNumber, tx.DepositAddress, tx.DepositMemo, amount, target, tx.Status, now, now);
+            var payment = new PegasusPayment(tx.OrderNumber, tx.DepositAddress, tx.DepositMemo, amount, target, tx.Status, now, now, tx.ReceiveAmount);
             lock (entry)
                 entry.Swaps.Add(new Swap { Payment = payment });
             await Log(entry.InvoiceId,
@@ -348,6 +360,15 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                             : InvoiceEventData.EventSeverity.Info);
                 changed |= await LogTx(entry.InvoiceId, swap, tx.DepositTxId, "Customer's XMR deposit transaction");
                 changed |= await LogTx(entry.InvoiceId, swap, tx.PayoutTxId, "Pegasus Swap's BTC payout transaction");
+                if (updated.Status != payment.Status && pendingPayments is not null)
+                {
+                    // The exchange has the XMR: the invoice shows as Processing until the BTC arrives.
+                    if (Received(updated.Status) && !Received(payment.Status))
+                        await pendingPayments.Add(entry.InvoiceId, entry.PaymentMethodId, payment.OrderNumber, payment.PendingBtc);
+                    else if (updated.Status is PegasusStatus.Refund or PegasusStatus.Overdue)
+                        await pendingPayments.Retire(entry.InvoiceId, entry.PaymentMethodId, payment.OrderNumber,
+                            $"Pegasus Swap order {payment.OrderNumber} is {PegasusStatus.Name(updated.Status)}");
+                }
             }
         }
         catch (Exception ex)
@@ -368,13 +389,21 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         {
             if (cancellationToken.IsCancellationRequested)
                 return;
-            Swap[] open;
+            Swap[] open, given;
             lock (entry)
             {
                 if (entry.Running is { IsCompleted: false })
                     continue;
                 open = entry.Swaps.Where(s => !s.Final && now - s.Payment.Created < FollowFor && now - s.Payment.CheckedAt > RecheckEvery).ToArray();
+                given = entry.Swaps.Where(s => !s.GaveUp && now - s.Payment.Created >= FollowFor).ToArray();
+                foreach (var s in given)
+                    s.GaveUp = true;
             }
+            // A day on, an order that never paid out stops holding the invoice in Processing.
+            if (pendingPayments is not null)
+                foreach (var swap in given)
+                    await pendingPayments.Retire(entry.InvoiceId, entry.PaymentMethodId, swap.Payment.OrderNumber,
+                        $"Pegasus Swap order {swap.Payment.OrderNumber} has not paid out within {FollowFor.TotalHours:0} hours");
             foreach (var swap in open)
                 await Recheck(entry, swap);
         }
@@ -425,7 +454,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                 var swap = new Swap
                 {
                     Payment = new PegasusPayment(s.OrderNumber, s.Address, s.Memo, decimal.Parse(s.Amount, CultureInfo.InvariantCulture), s.TargetSats,
-                        s.Status, s.Created, DateTimeOffset.MinValue)
+                        s.Status, s.Created, DateTimeOffset.MinValue,
+                        decimal.TryParse(s.ReceiveBtc, NumberStyles.Number, CultureInfo.InvariantCulture, out var r) ? r : null)
                 };
                 foreach (var tx in s.LoggedTxs)
                     swap.LoggedTxs.Add(tx);
@@ -453,6 +483,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                     Memo = s.Payment.Memo,
                     Amount = s.Payment.Amount.ToString(CultureInfo.InvariantCulture),
                     TargetSats = s.Payment.TargetSats,
+                    ReceiveBtc = s.Payment.ReceiveBtc?.ToString(CultureInfo.InvariantCulture),
                     Status = s.Payment.Status,
                     Created = s.Payment.Created,
                     LoggedTxs = s.LoggedTxs.ToArray()

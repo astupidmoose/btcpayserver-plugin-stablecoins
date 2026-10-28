@@ -41,6 +41,7 @@ public class SwapToBtcListener(
     BTCPayWalletProvider walletProvider,
     ExplorerClientProvider explorerClientProvider,
     WalletRepository walletRepository,
+    Pegasus.IPendingPayments pendingPayments,
     ILogger<SwapToBtcListener> logger) : EventHostedServiceBase(eventAggregator, logger)
 {
     BTCPayNetwork Network => networkProvider.BTC;
@@ -132,6 +133,9 @@ public class SwapToBtcListener(
         wallet.InvalidateCache(handler.Network.NBXplorerNetwork.DerivationStrategyFactory.Parse(
             handler.ParsePaymentPromptDetails(invoice.GetPaymentPrompt(pmi)!.Details).AccountDerivation!));
         await LabelTransaction(invoice, outPoint.Hash);
+        // The BTC a Monero swap promised has arrived: it replaces the pending payment.
+        if (handler.Chain.Provider == SwapProvider.Pegasus)
+            await pendingPayments.Retire(invoice.Id, pmi, null, $"the BTC arrived in {id}");
         invoice = await invoiceRepository.GetInvoice(invoice.Id);
         EventAggregator.Publish(new InvoiceEvent(invoice, InvoiceEvent.ReceivedPayment) { Payment = payment });
     }
@@ -221,8 +225,9 @@ public class SwapToBtcListener(
     /// </summary>
     async Task RefreshConfirmations(BTCPayWallet wallet, InvoiceEntity invoice, SwapToBtcPaymentMethodHandler handler)
     {
+        // Pending Monero payments have no BTC transaction yet: PendingPayments handles them.
         var payments = invoice.GetPayments(false)
-            .Where(p => p.PaymentMethodId == handler.PaymentMethodId)
+            .Where(p => p.PaymentMethodId == handler.PaymentMethodId && !string.IsNullOrEmpty(handler.ParsePaymentDetails(p.Details).Outpoint))
             .ToList();
         if (payments.Count == 0)
             return;
