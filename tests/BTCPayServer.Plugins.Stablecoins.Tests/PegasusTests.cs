@@ -104,15 +104,24 @@ public class PegasusTests
     {
         public List<(string Order, decimal Btc)> Added { get; } = new();
         public List<string?> Retired { get; } = new();
-        public Task Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc)
+        /// <summary>This many calls fail (the database did not answer) before they succeed.</summary>
+        public int Failures { get; set; }
+        public int Calls { get; private set; }
+        public Task<bool> Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated)
         {
+            Calls++;
+            if (Failures > 0 && Failures-- > 0)
+                return Task.FromResult(false);
             Added.Add((orderNumber, btc));
-            return Task.CompletedTask;
+            return Task.FromResult(true);
         }
-        public Task Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason)
+        public Task<bool> Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason)
         {
+            Calls++;
+            if (Failures > 0 && Failures-- > 0)
+                return Task.FromResult(false);
             Retired.Add(orderNumber);
-            return Task.CompletedTask;
+            return Task.FromResult(true);
         }
     }
 
@@ -251,6 +260,72 @@ public class PegasusTests
 
         fake.Status = PegasusStatus.Refund;
         service.Now = () => DateTimeOffset.UtcNow.AddMinutes(3);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.Retired));
+    }
+
+    [Fact]
+    public async Task AFailedPendingPaymentWriteIsTriedAgain()
+    {
+        var pending = new FakePending { Failures = 2 };
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+
+        fake.Status = PegasusStatus.Confirmation;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Empty(pending.Added);
+        // The status no longer changes, yet the next rounds try again until it is recorded, and then stop.
+        await service.FollowAll(CancellationToken.None);
+        await service.FollowAll(CancellationToken.None);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal(("O1", 0.01m), Assert.Single(pending.Added));
+        Assert.Equal(3, pending.Calls);
+
+        pending.Failures = 1;
+        fake.Status = PegasusStatus.Refund;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(2);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Empty(pending.Retired);
+        await service.FollowAll(CancellationToken.None);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.Retired));
+    }
+
+    [Fact]
+    public async Task AResumedOrderStillRetiresItsPendingPayment()
+    {
+        var pending = new FakePending();
+        var (service, _) = Create(pending: pending);
+        // Saved after the exchange refunded it, before its pending payment could be retired.
+        service.Restore("inv9", "store1", Monero.PaymentMethodId, Config(),
+        [
+            new PersistedPegasusSwap { OrderNumber = "O1", Address = "8saved", Amount = "1.5", TargetSats = 1_000_000, Status = PegasusStatus.Refund,
+                Created = DateTimeOffset.UtcNow, PendingAdded = true }
+        ]);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.Retired));
+        Assert.Empty(pending.Added);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Single(pending.Retired);
+    }
+
+    [Fact]
+    public async Task APaidOutOrderIsFollowedUntilItsPendingPaymentIsRetired()
+    {
+        var pending = new FakePending();
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+        fake.Status = PegasusStatus.Success;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Single(pending.Added);
+
+        // Long idle, but within the day: still kept, so the pending payment can be retired if the BTC never comes.
+        service.Now = () => DateTimeOffset.UtcNow.AddHours(13);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Empty(pending.Retired);
+        service.Now = () => DateTimeOffset.UtcNow.AddHours(25);
         await service.FollowAll(CancellationToken.None);
         Assert.Equal("O1", Assert.Single(pending.Retired));
     }

@@ -16,8 +16,10 @@ namespace BTCPayServer.Plugins.Stablecoins.Pegasus;
 
 public interface IPendingPayments
 {
-    Task Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc);
-    Task Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason);
+    /// <summary>False when it could not be done and should be tried again; true when done or not needed.</summary>
+    Task<bool> Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated);
+    /// <summary>False when it could not be done and should be tried again; true when done or not needed.</summary>
+    Task<bool> Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason);
 }
 
 /// <summary>
@@ -38,19 +40,24 @@ public class PendingPayments(
     public static bool IsPending(PaymentEntity payment, SwapToBtcPaymentMethodHandler handler) =>
         payment.PaymentMethodId == handler.PaymentMethodId && handler.ParsePaymentDetails(payment.Details).PendingOrder is not null;
 
-    /// <summary>Records the pending payment, unless BTC already arrived for the invoice or it was recorded before.</summary>
-    public async Task Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc)
+    /// <summary>
+    /// Records the pending payment, unless it was recorded before, the invoice is no longer waiting for payment, or BTC
+    /// arrived since the order was made (it may be this order's own payout, which must not count twice). BTC that arrived
+    /// before the order (a partial payment that this order completes) does not stop it.
+    /// </summary>
+    public async Task<bool> Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated)
     {
         try
         {
             if (!handlers.TryGetValue(pmi, out var h) || h is not SwapToBtcPaymentMethodHandler handler || btc <= 0m)
-                return;
+                return true;
             var invoice = await invoiceRepository.GetInvoice(invoiceId);
             if (invoice is null || invoice.Status != InvoiceStatus.New)
-                return;
+                return true;
             var payments = invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi).ToList();
-            if (payments.Any(p => p.Id == PaymentId(orderNumber)) || payments.Any(p => p.Accounted && !IsPending(p, handler)))
-                return;
+            if (payments.Any(p => p.Id == PaymentId(orderNumber)) ||
+                payments.Any(p => p.Accounted && !IsPending(p, handler) && p.ReceivedTime >= orderCreated))
+                return true;
             var data = new SwapToBtcPaymentData { PendingOrder = orderNumber };
             var paymentData = new PaymentData
             {
@@ -62,28 +69,30 @@ public class PendingPayments(
             }.Set(invoice, handler, data);
             var payment = await paymentService.AddPayment(paymentData);
             if (payment is null)
-                return;
+                return true;
             await Log(invoiceId, $"Pegasus Swap order {orderNumber} received the customer's XMR. Recorded as a pending payment of {btc} BTC " +
                                  "until the BTC arrives; it never settles on its own.");
             invoice = await invoiceRepository.GetInvoice(invoiceId);
             eventAggregator.Publish(new InvoiceEvent(invoice, InvoiceEvent.ReceivedPayment) { Payment = payment });
+            return true;
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not record the pending Monero payment of invoice {InvoiceId}", invoiceId);
+            logger.LogWarning(ex, "Could not record the pending Monero payment of invoice {InvoiceId}; trying again later", invoiceId);
+            return false;
         }
     }
 
     /// <summary>Stops counting the invoice's pending payments (only <paramref name="orderNumber"/>'s, when given).</summary>
-    public async Task Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason)
+    public async Task<bool> Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason)
     {
         try
         {
             if (!handlers.TryGetValue(pmi, out var h) || h is not SwapToBtcPaymentMethodHandler handler)
-                return;
+                return true;
             var invoice = await invoiceRepository.GetInvoice(invoiceId);
             if (invoice is null)
-                return;
+                return true;
             var retired = new List<PaymentEntity>();
             foreach (var payment in invoice.GetPayments(false))
             {
@@ -94,14 +103,16 @@ public class PendingPayments(
                 retired.Add(payment);
             }
             if (retired.Count == 0)
-                return;
+                return true;
             await paymentService.UpdatePayments(retired);
             await Log(invoiceId, $"Pending Monero payment no longer counted: {reason}.");
             eventAggregator.Publish(new InvoiceNeedUpdateEvent(invoiceId));
+            return true;
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not retire the pending Monero payment of invoice {InvoiceId}", invoiceId);
+            logger.LogWarning(ex, "Could not retire the pending Monero payment of invoice {InvoiceId}; trying again later", invoiceId);
+            return false;
         }
     }
 

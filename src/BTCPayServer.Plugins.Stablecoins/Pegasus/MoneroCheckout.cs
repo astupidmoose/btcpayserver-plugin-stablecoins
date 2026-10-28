@@ -1,4 +1,5 @@
 #nullable enable
+using System;
 using System.Globalization;
 using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
@@ -80,9 +81,10 @@ public class MoneroCheckoutModelExtension(
         if (rate > 0m)
             model.Rate = displayFormatter.Currency(rate / perBtc, invoice.Currency, DisplayFormatter.CurrencyFormat.Symbol);
         model.Address = payment.Address;
-        // A Monero payment URI: wallets that scan it fill in the address and the amount.
+        // A Monero payment URI: wallets that scan it fill in the address, the amount and any payment id the exchange asks for.
         model.InvoiceBitcoinUrl = model.InvoiceBitcoinUrlQR =
-            $"monero:{payment.Address}?tx_amount={payment.Amount.ToString("0.############", CultureInfo.InvariantCulture)}";
+            $"monero:{payment.Address}?tx_amount={payment.Amount.ToString("0.############", CultureInfo.InvariantCulture)}" +
+            (string.IsNullOrWhiteSpace(payment.Memo) ? "" : "&tx_payment_id=" + Uri.EscapeDataString(payment.Memo));
         model.ShowPayInWalletButton = true;
         data["memo"] = payment.Memo;
     }
