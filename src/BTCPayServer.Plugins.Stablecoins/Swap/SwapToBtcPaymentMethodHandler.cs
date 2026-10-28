@@ -79,6 +79,8 @@ public class SwapToBtcPaymentMethodHandler(
         }
 
         // Monero swaps have a minimum and maximum: an order outside them, or a store without keys, does not offer Monero at all.
+        if (chain.Provider == SwapProvider.Pegasus && Network.NBitcoinNetwork.ChainName != ChainName.Mainnet)
+            throw new PaymentMethodUnavailableException("Monero swaps pay mainnet BTC only");
         if (chain.Provider == SwapProvider.Pegasus && context.InvoiceEntity.Type != InvoiceType.TopUp)
         {
             var config = context.PaymentMethodConfig is { } token ? ParsePaymentMethodConfig(token) : new SwapToBtcPaymentMethodConfig();
@@ -139,8 +141,13 @@ public class SwapToBtcPaymentMethodHandler(
         if (config is null)
             validationContext.ModelState.AddModelError("config", "Invalid configuration");
         else
+        {
+            // BTCPay's API returns payment method configs: keys belong in the plugin's own settings page.
+            if (!string.IsNullOrEmpty(config.PegasusPublicKey) || !string.IsNullOrEmpty(config.PegasusSecret))
+                validationContext.ModelState.AddModelError(nameof(config.PegasusSecret), "Set the Pegasus Swap keys on the plugin's settings page, not in the payment method config.");
             foreach (var error in Validate(config))
                 validationContext.ModelState.AddModelError(error.Field, error.Message);
+        }
         return Task.CompletedTask;
     }
 

@@ -203,6 +203,30 @@ public class PegasusTests
     }
 
     [Fact]
+    public async Task AShortPayoutGetsANewOrderForTheRest()
+    {
+        var (service, fake) = Create();
+        await Ready(service, Config(), 0.01m);
+        fake.Status = PegasusStatus.Success;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal(PegasusState.Received, service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.01m).State);
+
+        fake.Status = PegasusStatus.New;
+        var rest = await Ready(service, Config(), 0.0001m);
+        Assert.Equal(PegasusState.Ready, rest.State);
+        Assert.Equal("O2", rest.Payment!.OrderNumber);
+    }
+
+    [Fact]
+    public void MoneroHasNoDirectPaymentLink()
+    {
+        var handler = new SwapToBtcPaymentMethodHandler(Monero, null!, null!, null!, null!, null!);
+        var prompt = new BTCPayServer.Services.Invoices.PaymentPrompt { Destination = BtcAddress };
+        Assert.Null(new SwapToBtcPaymentLinkExtension(handler).GetPaymentLink(prompt, null));
+    }
+
+    [Fact]
     public async Task AnOverdueOrderGetsReplaced()
     {
         var (service, fake) = Create();

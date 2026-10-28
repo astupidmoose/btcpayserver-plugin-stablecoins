@@ -117,9 +117,10 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
 
     async Task<PegasusClient.Credentials?> Keys(string storeId, SwapToBtcPaymentMethodConfig config)
     {
+        // Only the plugin's own store setting: a key in a payment method config would be readable through BTCPay's API.
         var keys = secrets is null ? null : await secrets.GetAsync(storeId);
-        var publicKey = keys?.PegasusPublicKey ?? config.PegasusPublicKey;
-        var secret = keys?.PegasusSecret ?? config.PegasusSecret;
+        var publicKey = secrets is null ? config.PegasusPublicKey : keys?.PegasusPublicKey;
+        var secret = secrets is null ? config.PegasusSecret : keys?.PegasusSecret;
         return string.IsNullOrWhiteSpace(publicKey) || string.IsNullOrWhiteSpace(secret) ? null : new(publicKey.Trim(), secret.Trim());
     }
 
@@ -157,8 +158,9 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                     : limit == Bound.Minimum ? (Math.Max(old.Below ?? 0m, target), old.Above, now) : (old.Below, Math.Min(old.Above ?? target, target), now));
             return limit == Bound.Minimum ? "Below the exchange's minimum" : "Above the exchange's maximum";
         }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception ex)
         {
+            // Includes a timeout: a slow exchange leaves Monero off this invoice instead of failing the invoice.
             logger.LogWarning(ex, "Could not get a Monero estimate for store {StoreId}", storeId);
             return "The exchange could not be reached: " + ex.Message;
         }
@@ -187,9 +189,10 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         {
             entry.Touched = now;
             entry.Config = config;
-            // A deposit on its way stays on screen even if the amount due changed meanwhile.
+            // A deposit on its way stays on screen even if the amount due changed meanwhile. A finished order only for the
+            // amount it was made for: after a short payout, the rest gets a new order.
             var shown = entry.Swaps.LastOrDefault(s => InProgress(s.Payment.Status))
-                        ?? entry.Swaps.LastOrDefault(s => s.Payment.TargetSats == target && s.Payment.Status is PegasusStatus.New);
+                        ?? entry.Swaps.LastOrDefault(s => s.Payment.TargetSats == target && s.Payment.Status is PegasusStatus.New or PegasusStatus.Success or PegasusStatus.Refund);
             if (shown is not null)
             {
                 if (!shown.Final && now - shown.Payment.CheckedAt > RecheckEvery && entry.Running is not { IsCompleted: false })
@@ -211,9 +214,9 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         return result;
     }
 
-    /// <summary>The exchange has the customer's XMR: confirming, swapping, paying out, or held up (error, pause, stuck).</summary>
+    /// <summary>The exchange has the customer's XMR and has not finished: confirming, swapping, paying out, or held up (error, pause, stuck).</summary>
     static bool InProgress(int status) => status is PegasusStatus.Confirmation or PegasusStatus.Exchanging or PegasusStatus.Sending
-        or PegasusStatus.Success or PegasusStatus.Error or PegasusStatus.Pause or PegasusStatus.Stuck or PegasusStatus.Refund;
+        or PegasusStatus.Error or PegasusStatus.Pause or PegasusStatus.Stuck;
 
     static PegasusSwapStatus StatusOf(PegasusPayment payment) => payment.Status switch
     {
