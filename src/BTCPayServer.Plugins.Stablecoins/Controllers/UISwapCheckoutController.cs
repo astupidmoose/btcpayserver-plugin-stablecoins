@@ -51,7 +51,7 @@ public class UISwapCheckoutController(
     [HttpPost("swaps/{invoiceId}/{paymentMethodId}/source")]
     public async Task<IActionResult> Source(string invoiceId, string paymentMethodId, [FromBody] SourceTransaction body)
     {
-        if (!PaymentMethodId.TryParse(paymentMethodId, out var pmi) || SwapSourceChain.Find(pmi) is not { } chain)
+        if (!PaymentMethodId.TryParse(paymentMethodId, out var pmi) || SwapSourceChain.Find(pmi) is not { Provider: SwapProvider.Lifi } chain)
             return NotFound();
         var txHash = body?.TxHash?.Trim();
         var from = body?.FromAddress?.Trim();

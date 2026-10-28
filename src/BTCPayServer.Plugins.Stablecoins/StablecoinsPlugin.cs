@@ -16,7 +16,8 @@ namespace BTCPayServer.Plugins.Stablecoins;
 /// <summary>
 /// Pay a BTC invoice from another chain: one payment method per source chain, each paying a fresh
 /// address from the store's own BTC wallet. Tokens on EVM chains, Solana and Tron go through LI.FI;
-/// USDC and USDT from an exchange go through NEAR Intents deposit addresses, inside those same checkouts.
+/// USDC and USDT from an exchange go through NEAR Intents deposit addresses, inside those same checkouts;
+/// Monero goes through Pegasus Swap deposit addresses, as its own payment method.
 /// </summary>
 public class StablecoinsPlugin : BaseBTCPayServerPlugin
 {
@@ -44,13 +45,21 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
         services.AddSingleton<SourceVerifier>();
         services.AddHostedService(p => p.GetRequiredService<SourceVerifier>());
         services.AddSingleton<Controllers.CheckoutNotes>();
+        services.AddHttpClient(Pegasus.PegasusClient.HttpClientName);
+        services.AddSingleton(provider => new Pegasus.PegasusClient(
+            provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(Pegasus.PegasusClient.HttpClientName)));
+        services.AddSingleton<Pegasus.PegasusSwapService>();
+        services.AddHostedService<Pegasus.PegasusTracker>();
 
         var btcTxLink = networkType == ChainName.Mainnet ? "https://mempool.space/tx/{0}" : "https://mempool.space/testnet/tx/{0}";
         foreach (var source in SwapSourceChain.PaymentMethods)
         {
             services.AddSingleton(provider => ActivatorUtilities.CreateInstance<SwapToBtcPaymentMethodHandler>(provider, source));
             services.AddSingleton<IPaymentMethodHandler>(provider => Handler(provider, source));
-            services.AddSingleton<ICheckoutModelExtension>(provider => ActivatorUtilities.CreateInstance<SwapToBtcCheckoutModelExtension>(provider, Handler(provider, source)));
+            if (source.Provider == SwapProvider.Pegasus)
+                services.AddSingleton<ICheckoutModelExtension>(provider => ActivatorUtilities.CreateInstance<Pegasus.MoneroCheckoutModelExtension>(provider, Handler(provider, source)));
+            else
+                services.AddSingleton<ICheckoutModelExtension>(provider => ActivatorUtilities.CreateInstance<SwapToBtcCheckoutModelExtension>(provider, Handler(provider, source)));
             services.AddSingleton<IPaymentLinkExtension>(provider => new SwapToBtcPaymentLinkExtension(Handler(provider, source)));
             services.AddDefaultPrettyName(source.PaymentMethodId, source.Name);
             services.AddTransactionLinkProvider(source.PaymentMethodId, new DefaultTransactionLinkProvider(btcTxLink));
@@ -62,6 +71,7 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
         services.AddUIExtension("store-wallets-nav", $"{ViewsDirectory}/StoreNavExtension.cshtml");
         services.AddUIExtension("store-invoices-payments", $"{ViewsDirectory}/ViewSwapToBtcPaymentData.cshtml");
         services.AddUIExtension("checkout-end", $"{ViewsDirectory}/SwapCheckout.cshtml");
+        services.AddUIExtension("checkout-end", $"{ViewsDirectory}/MoneroCheckout.cshtml");
     }
 
     static SwapToBtcPaymentMethodHandler Handler(System.IServiceProvider provider, SwapSourceChain source) =>
