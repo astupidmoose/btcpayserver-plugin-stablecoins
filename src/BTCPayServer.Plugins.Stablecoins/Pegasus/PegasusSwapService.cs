@@ -52,6 +52,8 @@ public class PersistedPegasusSwap
     [Newtonsoft.Json.JsonConverter(typeof(NBitcoin.JsonConverters.DateTimeToUnixTimeConverter))]
     public DateTimeOffset Created { get; set; }
     public string[] LoggedTxs { get; set; } = [];
+    /// <summary>Search terms not written yet (the write failed); retried until they are.</summary>
+    public string[] UnsavedTerms { get; set; } = [];
 }
 
 /// <summary>
@@ -91,6 +93,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
     {
         public required PegasusPayment Payment;
         public readonly HashSet<string> LoggedTxs = new(StringComparer.OrdinalIgnoreCase);
+        public readonly HashSet<string> UnsavedTerms = new(StringComparer.OrdinalIgnoreCase);
         public bool Final => Payment.Status is PegasusStatus.Success or PegasusStatus.Refund;
         /// <summary>No longer followed: its pending payment, if any, was retired.</summary>
         public bool GaveUp;
@@ -317,14 +320,15 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             var amount = tx.DepositAmount is > 0m and var a ? RoundUp(a, AmountDecimals) : request.DepositAmount;
             var now = Now();
             var payment = new PegasusPayment(tx.OrderNumber, tx.DepositAddress, tx.DepositMemo, amount, target, tx.Status, now, now, tx.ReceiveAmount);
+            var created = new Swap { Payment = payment };
             lock (entry)
-                entry.Swaps.Add(new Swap { Payment = payment });
+                entry.Swaps.Add(created);
             await Log(entry.InvoiceId,
                 $"Monero: send {amount} XMR to {payment.Address}" + (payment.Memo is null ? "" : $" with memo {payment.Memo}") +
                 $". Pegasus Swap order {tx.OrderNumber} (fixed rate): " + (tx.ReceiveAmount is { } out_ ? $"{out_} BTC" : $"{btc} BTC asked") +
                 $" to {btcAddress}. A swap that cannot complete is refunded in XMR to {refund}.");
             // Support can find the invoice by pasting the order number or the deposit address into the invoice search.
-            await SearchTerms(entry.InvoiceId, payment.Address, tx.OrderNumber);
+            await SearchTerms(entry.InvoiceId, created, payment.Address, tx.OrderNumber);
             await Save(entry);
         }
         catch (Exception ex)
@@ -404,6 +408,14 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                 foreach (var s in given)
                     s.GaveUp = true;
             }
+            Swap[] unsaved;
+            lock (entry)
+                unsaved = entry.Swaps.Where(s => { lock (s.UnsavedTerms) return s.UnsavedTerms.Count > 0; }).ToArray();
+            var saved = false;
+            foreach (var swap in unsaved)
+                saved |= await SearchTerms(entry.InvoiceId, swap);
+            if (saved)
+                await Save(entry);
             // A day on, an order that never paid out stops holding the invoice in Processing.
             if (pendingPayments is not null)
                 foreach (var swap in given)
@@ -464,6 +476,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                 };
                 foreach (var tx in s.LoggedTxs)
                     swap.LoggedTxs.Add(tx);
+                swap.UnsavedTerms.UnionWith(s.UnsavedTerms);
                 entry.Swaps.Add(swap);
             }
         }
@@ -491,7 +504,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                     ReceiveBtc = s.Payment.ReceiveBtc?.ToString(CultureInfo.InvariantCulture),
                     Status = s.Payment.Status,
                     Created = s.Payment.Created,
-                    LoggedTxs = s.LoggedTxs.ToArray()
+                    LoggedTxs = s.LoggedTxs.ToArray(),
+                    UnsavedTerms = UnsavedOf(s)
                 }).ToList();
             await invoiceRepository.UpdatePaymentDetails(entry.InvoiceId, entry.PaymentMethodId, Newtonsoft.Json.Linq.JObject.FromObject(parsed, DetailsSerializer));
         }
@@ -516,21 +530,41 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                 return false;
         }
         await Log(invoiceId, $"{what}: {txId}");
-        await SearchTerms(invoiceId, txId);
+        await SearchTerms(invoiceId, swap, txId);
         return true;
     }
 
-    async Task SearchTerms(string invoiceId, params string?[] terms)
+    /// <summary>
+    /// Makes the order findable from the invoice search. A failed write keeps the terms on the swap (saved with the invoice),
+    /// and <see cref="FollowAll"/> tries them again, so the order number and transaction ids always end up searchable.
+    /// </summary>
+    async Task<bool> SearchTerms(string invoiceId, Swap swap, params string?[] terms)
     {
         var list = terms.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t!).ToList();
+        lock (swap.UnsavedTerms)
+            list.AddRange(swap.UnsavedTerms.Where(t => !list.Contains(t, StringComparer.OrdinalIgnoreCase)));
+        if (list.Count == 0)
+            return true;
         try
         {
             await invoiceRepository.AddSearchTerms(invoiceId, list);
+            lock (swap.UnsavedTerms)
+                swap.UnsavedTerms.ExceptWith(list);
+            return true;
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not add search terms to invoice {InvoiceId}", invoiceId);
+            logger.LogWarning(ex, "Could not add search terms to invoice {InvoiceId}; trying again later", invoiceId);
+            lock (swap.UnsavedTerms)
+                swap.UnsavedTerms.UnionWith(list);
+            return false;
         }
+    }
+
+    static string[] UnsavedOf(Swap swap)
+    {
+        lock (swap.UnsavedTerms)
+            return swap.UnsavedTerms.ToArray();
     }
 
     async Task Log(string invoiceId, string message, InvoiceEventData.EventSeverity severity = InvoiceEventData.EventSeverity.Info)
@@ -553,7 +587,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         {
             bool done;
             lock (entry)
-                done = now - entry.Touched > ForgetAfter && entry.Swaps.All(s => s.Final || now - s.Payment.Created > FollowFor);
+                done = now - entry.Touched > ForgetAfter && entry.Swaps.All(s => (s.Final || now - s.Payment.Created > FollowFor) && UnsavedOf(s).Length == 0);
             if (done)
                 _entries.TryRemove(key, out _);
         }
