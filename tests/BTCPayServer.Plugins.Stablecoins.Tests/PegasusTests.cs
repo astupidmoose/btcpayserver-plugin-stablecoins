@@ -28,6 +28,8 @@ public class PegasusTests
         /// <summary>Every order pays this much BTC, whatever is deposited (the rate keeps worsening).</summary>
         public decimal? FixedPayout { get; set; }
         public bool SwapEstimateFields { get; set; }
+        /// <summary>Estimates leave out the XMR side.</summary>
+        public bool OmitEstimateXmr { get; set; }
         /// <summary>Created orders leave out where they pay.</summary>
         public bool OmitReceiveAddress { get; set; }
         /// <summary>Created orders leave out how much BTC they pay.</summary>
@@ -56,8 +58,8 @@ public class PegasusTests
                 json = new JObject
                 {
                     ["pair"] = "XMR_BTC",
-                    ["amount"] = SwapEstimateFields ? btc : xmr,
-                    ["receive"] = SwapEstimateFields ? xmr : btc,
+                    ["amount"] = OmitEstimateXmr ? null : SwapEstimateFields ? btc : xmr,
+                    ["receive"] = SwapEstimateFields ? (OmitEstimateXmr ? null : xmr) : btc,
                     ["exchangeRate"] = BtcPerXmr,
                     ["minAmount"] = 0.05m,
                     ["maxAmount"] = 500m
@@ -658,6 +660,13 @@ public class PegasusTests
         Assert.Equal("Below the exchange's minimum", await service.Unavailable("store1", Config(), 0.0001m, CancellationToken.None));
         Assert.Equal("Above the exchange's maximum", await service.Unavailable("store1", Config(), 3m, CancellationToken.None));
         Assert.Null(await service.Unavailable("store1", Config(), 0.01m, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task MoneroIsUnavailableWhenTheEstimateGivesNoXmrAmount()
+    {
+        var (service, _) = Create(new FakePegasus { OmitEstimateXmr = true });
+        Assert.NotNull(await service.Unavailable("store1", Config(), 0.01m, CancellationToken.None));
     }
 
     [Fact]

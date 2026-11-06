@@ -226,13 +226,14 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             var estimate = await client.Estimate(BaseUrl, keys, DepositCoin, deposit, ReceiveCoin, receive, target, "receive", cancellationToken);
             // Limits the exchange states in an answer (in XMR), not only in a refusal: never offer Monero for an order it
             // would refuse once the checkout opens.
-            if (DepositFromEstimate(estimate, target) is { } xmr)
-            {
-                if (estimate.MinAmount is > 0m and var min && xmr < min)
-                    return "Below the exchange's minimum";
-                if (estimate.MaxAmount is > 0m and var max && xmr > max)
-                    return "Above the exchange's maximum";
-            }
+            // An estimate that does not give a positive XMR amount could never become an order: Monero stays off the invoice.
+            var xmr = DepositFromEstimate(estimate, target) ?? 0m;
+            if (xmr <= 0m)
+                return "The exchange gave no usable estimate";
+            if (estimate.MinAmount is > 0m and var min && xmr < min)
+                return "Below the exchange's minimum";
+            if (estimate.MaxAmount is > 0m and var max && xmr > max)
+                return "Above the exchange's maximum";
             foreach (var (key, old) in _estimates.ToArray())
                 if (now - old.At >= EstimateFor)
                     _estimates.TryRemove(key, out _);
