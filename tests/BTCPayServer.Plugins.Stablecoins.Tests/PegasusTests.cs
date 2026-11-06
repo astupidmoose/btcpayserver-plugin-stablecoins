@@ -32,6 +32,9 @@ public class PegasusTests
         public bool OmitReceiveAddress { get; set; }
         /// <summary>Created orders leave out how much BTC they pay.</summary>
         public bool OmitReceiveAmount { get; set; }
+        /// <summary>Order lookups leave out the status, or send this one that cannot be read.</summary>
+        public bool OmitStatus { get; set; }
+        public JToken? StatusOverride { get; set; }
         public const decimal BtcPerXmr = 0.004m;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -78,6 +81,10 @@ public class PegasusTests
                 var deposit = body["depositAmount"]!.Value<decimal>();
                 json = Order(n, deposit, deposit * BtcPerXmr, body["receiveAddress"]!.ToString());
                 json["status"] = Status;
+                if (OmitStatus)
+                    ((JObject)json).Remove("status");
+                else if (StatusOverride is { } bad)
+                    json["status"] = bad;
                 if (Status != PegasusStatus.New)
                     json["txId"] = "xmrdeposittx";
                 if (Status == PegasusStatus.Success)
@@ -317,6 +324,41 @@ public class PegasusTests
         Assert.Equal("O1", service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.005m).Payment!.OrderNumber);
         await service.Pending("inv1");
         Assert.Single(fake.Created);
+    }
+
+    [Fact]
+    public async Task AMissingOrUnreadableStatusKeepsTheLastOne()
+    {
+        var pending = new FakePending();
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+        fake.Status = PegasusStatus.Exchanging;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Single(pending.Added);
+        foreach (var bad in new Action[] { () => fake.OmitStatus = true, () => { fake.OmitStatus = false; fake.StatusOverride = "soon"; } })
+        {
+            bad();
+            service.Now = () => DateTimeOffset.UtcNow.AddMinutes(2);
+            await service.FollowAll(CancellationToken.None);
+            var status = service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.005m);
+            Assert.Equal("O1", status.Payment!.OrderNumber);
+            Assert.Equal(PegasusStatus.Exchanging, status.Payment.Status);
+            await service.Pending("inv1");
+            Assert.Single(fake.Created);
+            Assert.Empty(pending.Retired);
+        }
+        Assert.Null(PegasusClient.Transaction(JObject.Parse("{\"orderNumber\":\"O1\"}")).Status);
+    }
+
+    [Fact]
+    public void OnlyBtcCoveringThePendingPaymentRetiresIt()
+    {
+        var since = DateTimeOffset.UtcNow;
+        // Dust, or BTC from before the order, is not this order's payout.
+        Assert.False(PendingPayments.Covers(new[] { (since.AddMinutes(1), 0.00001m), (since.AddMinutes(-1), 0.01m) }, since, 0.005m));
+        Assert.True(PendingPayments.Covers(new[] { (since.AddMinutes(1), 0.002m), (since.AddMinutes(2), 0.003m) }, since, 0.005m));
+        Assert.True(PendingPayments.Covers(new[] { (since, 0.005m) }, since, 0.005m));
     }
 
     [Fact]

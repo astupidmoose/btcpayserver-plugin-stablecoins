@@ -79,7 +79,7 @@ public class PegasusClient(HttpClient http)
         return new PegasusTransaction
         {
             OrderNumber = json["orderNumber"]?.ToString() ?? "",
-            Status = json["status"] is { Type: JTokenType.Integer or JTokenType.String } s && int.TryParse(s.ToString(), out var status) ? status : PegasusStatus.New,
+            Status = json["status"] is { Type: JTokenType.Integer or JTokenType.String } s && int.TryParse(s.ToString(), out var status) ? status : null,
             DepositAddress = Text(deposit?["address"]),
             DepositMemo = Text(deposit?["memo"]),
             DepositAmount = Decimal(deposit?.SelectToken("coin.value")),
@@ -205,7 +205,8 @@ public class PegasusCreateRequest
 public class PegasusTransaction
 {
     public string OrderNumber { get; set; } = "";
-    public int Status { get; set; }
+    /// <summary>Null when the answer left it out or it could not be read: the order's last known status stands.</summary>
+    public int? Status { get; set; }
     public string? DepositAddress { get; set; }
     public string? DepositMemo { get; set; }
     public decimal? DepositAmount { get; set; }

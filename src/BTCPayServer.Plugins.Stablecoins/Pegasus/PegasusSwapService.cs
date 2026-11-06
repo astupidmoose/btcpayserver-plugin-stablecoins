@@ -374,7 +374,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                     : $"The swap pays {tx.ReceiveAddress}, not this invoice's address {btcAddress}");
             var amount = tx.DepositAmount is > 0m and var a ? RoundUp(a, AmountDecimals) : request.DepositAmount;
             var now = Now();
-            var payment = new PegasusPayment(tx.OrderNumber, tx.DepositAddress, tx.DepositMemo, amount, target, tx.Status, now, now, tx.ReceiveAmount);
+            var payment = new PegasusPayment(tx.OrderNumber, tx.DepositAddress, tx.DepositMemo, amount, target, tx.Status ?? PegasusStatus.New, now, now, tx.ReceiveAmount);
             var created = new Swap { Payment = payment };
             lock (entry)
                 entry.Swaps.Add(created);
@@ -415,7 +415,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             if (await Keys(entry.StoreId, entry.Config) is { } keys)
             {
                 var tx = await client.Get(BaseUrl, keys, payment.OrderNumber, CancellationToken.None);
-                updated = updated with { Status = tx.Status };
+                // A missing or unreadable status keeps the last one, so a funded order never looks new again.
+                updated = updated with { Status = tx.Status ?? payment.Status };
                 changed = updated.Status != payment.Status;
                 if (changed)
                     await Log(entry.InvoiceId, $"Pegasus Swap order {payment.OrderNumber}: {PegasusStatus.Name(updated.Status)}",

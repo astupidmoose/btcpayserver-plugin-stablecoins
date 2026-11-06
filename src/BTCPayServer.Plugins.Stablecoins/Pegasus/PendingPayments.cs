@@ -21,7 +21,7 @@ public interface IPendingPayments
     /// <summary>False when it could not be done and should be tried again; true when done or not needed.</summary>
     Task<bool> Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason);
     /// <summary>
-    /// Retires the order's pending payment if BTC arrived on the invoice since the order was made. True when it no longer
+    /// Retires the order's pending payment if BTC covering it arrived on the invoice since the order was made. True when it no longer
     /// counts (retired now or before, or there is none); false when the BTC has not arrived yet or the write failed.
     /// </summary>
     Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated);
@@ -51,9 +51,19 @@ public class PendingPayments(
         payment.PaymentMethodId == handler.PaymentMethodId && handler.ParsePaymentDetails(payment.Details).PendingOrder is not null;
 
     /// <summary>
-    /// Records the pending payment, unless it was recorded before, the invoice is no longer waiting for payment, or BTC
-    /// arrived since the order was made (it may be this order's own payout, which must not count twice). BTC that arrived
-    /// before the order (a partial payment that this order completes) does not stop it.
+    /// Whether the real BTC received since <paramref name="since"/> adds up to <paramref name="btc"/>. Only then can it be
+    /// the order's payout: dust, or a late payout of an older (smaller) order, is not enough.
+    /// </summary>
+    public static bool Covers(IEnumerable<(DateTimeOffset Received, decimal Value)> real, DateTimeOffset since, decimal btc) =>
+        real.Where(p => p.Received >= since).Sum(p => p.Value) >= btc;
+
+    static IEnumerable<(DateTimeOffset, decimal)> Real(IEnumerable<PaymentEntity> payments, SwapToBtcPaymentMethodHandler handler) =>
+        payments.Where(p => p.Accounted && !IsPending(p, handler)).Select(p => (p.ReceivedTime, p.Value));
+
+    /// <summary>
+    /// Records the pending payment, unless it was recorded before, the invoice is no longer waiting for payment, or enough
+    /// BTC arrived since the order was made to be its payout (which must not count twice). BTC that arrived before the order
+    /// (a partial payment that this order completes), or too little since, does not stop it.
     /// </summary>
     public async Task<bool> Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated)
     {
@@ -72,7 +82,7 @@ public class PendingPayments(
                     eventAggregator.Publish(new InvoiceNeedUpdateEvent(invoiceId));
                 return true;
             }
-            if (payments.Any(p => p.Accounted && !IsPending(p, handler) && p.ReceivedTime >= orderCreated))
+            if (Covers(Real(payments, handler), orderCreated, btc))
                 return true;
             var data = new SwapToBtcPaymentData { PendingOrder = orderNumber };
             var paymentData = new PaymentData
@@ -142,11 +152,10 @@ public class PendingPayments(
             if (invoice is null)
                 return;
             var payments = invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi && p.Accounted).ToList();
-            var real = payments.Where(p => !IsPending(p, handler)).ToList();
+            var real = Real(payments, handler).ToList();
             foreach (var pending in payments.Where(p => IsPending(p, handler)))
             {
-                var received = real.Where(p => p.ReceivedTime >= pending.ReceivedTime).Sum(p => p.Value);
-                if (received >= pending.Value)
+                if (Covers(real, pending.ReceivedTime, pending.Value))
                     await Retire(invoiceId, pmi, handler.ParsePaymentDetails(pending.Details).PendingOrder, reason);
             }
         }
@@ -167,9 +176,9 @@ public class PendingPayments(
             if (invoice is null)
                 return true;
             var payments = invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi).ToList();
-            if (payments.FirstOrDefault(p => p.Id == PaymentId(orderNumber)) is not { Accounted: true })
+            if (payments.FirstOrDefault(p => p.Id == PaymentId(orderNumber)) is not { Accounted: true } pending)
                 return true;
-            if (!payments.Any(p => p.Accounted && !IsPending(p, handler) && p.ReceivedTime >= orderCreated))
+            if (!Covers(Real(payments, handler), orderCreated, pending.Value))
                 return false;
             return await Retire(invoiceId, pmi, orderNumber, $"the BTC of Pegasus Swap order {orderNumber} arrived");
         }
