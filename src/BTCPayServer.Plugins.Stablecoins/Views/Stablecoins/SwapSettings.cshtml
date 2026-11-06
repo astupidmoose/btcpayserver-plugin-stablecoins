@@ -174,7 +174,7 @@
                     <input asp-for="MoneroZeroConf" type="checkbox" class="form-check-input" />
                     <label asp-for="MoneroZeroConf" class="form-check-label"></label>
                 </div>
-                <div class="form-text">Settles a Monero order when Pegasus Swap's BTC payout reaches the mempool, without waiting for a confirmation, whatever the store's speed setting. Only Pegasus Swap pays that address and it already has the customer's XMR, so the risk is small; a payout it replaces stops counting. Pegasus Swap often pays out with a low fee, so a confirmation can take hours.</div>
+                <div class="form-text">Settles a Monero order when Pegasus Swap's BTC payout reaches the mempool, without waiting for a confirmation, whatever the store's speed setting. Only the transaction Pegasus Swap reports as the order's payout counts this way, never other BTC sent to the address; Pegasus Swap already has the customer's XMR, so the risk is small, and a payout it replaces stops counting. Pegasus Swap often pays out with a low fee, so a confirmation can take hours.</div>
             </div>
 
             <h4 class="mt-5 mb-2">All of them</h4>

@@ -60,6 +60,10 @@ public class PersistedPegasusSwap
     public bool PendingRetired { get; set; }
     /// <summary>Followed for its full time without paying out.</summary>
     public bool GaveUp { get; set; }
+    /// <summary>The BTC transaction the exchange reported as this order's payout: the only one trusted unconfirmed.</summary>
+    public string? PayoutTxId { get; set; }
+    /// <summary>The payout was marked trusted on the invoice (or found not to need it).</summary>
+    public bool PayoutTrusted { get; set; }
 }
 
 /// <summary>
@@ -105,6 +109,10 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         public bool GaveUp;
         public bool PendingAdded;
         public bool PendingRetired;
+        public string? PayoutTxId;
+        public bool PayoutTrusted;
+        /// <summary>The exchange named its payout transaction: the invoice's payment in it may settle unconfirmed.</summary>
+        public bool NeedsTrust => PayoutTxId is not null && !PayoutTrusted && !GaveUp;
         /// <summary>The exchange has the XMR and the order still counts: it should hold the invoice in Processing.</summary>
         public bool NeedsAdd => !PendingAdded && Received(Payment.Status) && !Abandoned;
         /// <summary>The order will not pay out: a pending payment recorded for it should stop counting.</summary>
@@ -117,7 +125,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         /// retired, or finished without one. A paid-out order with a pending payment is kept until its follow time ends,
         /// in case the BTC never comes.
         /// </summary>
-        public bool Done => !NeedsAdd && !NeedsRetire && !NeedsPayout && (GaveUp || PendingRetired || Final && !PendingAdded);
+        public bool Done => !NeedsAdd && !NeedsRetire && !NeedsPayout && !NeedsTrust && (GaveUp || PendingRetired || Final && !PendingAdded);
     }
 
     class Entry
@@ -404,6 +412,14 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                             : InvoiceEventData.EventSeverity.Info);
                 changed |= await LogTx(entry.InvoiceId, swap, tx.DepositTxId, "Customer's XMR deposit transaction");
                 changed |= await LogTx(entry.InvoiceId, swap, tx.PayoutTxId, "Pegasus Swap's BTC payout transaction");
+                if (tx.PayoutTxId?.Trim() is { Length: > 0 } payoutTx)
+                    lock (entry)
+                        if (swap.PayoutTxId != payoutTx)
+                        {
+                            swap.PayoutTxId = payoutTx;
+                            swap.PayoutTrusted = false;
+                            changed = true;
+                        }
             }
         }
         catch (Exception ex)
@@ -427,13 +443,23 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         if (pendingPayments is null)
             return false;
         bool add, retire, payout;
+        string? trust;
         PegasusPayment payment;
         lock (entry)
         {
             add = swap.NeedsAdd;
             retire = swap.NeedsRetire;
             payout = swap.NeedsPayout;
+            trust = swap.NeedsTrust ? swap.PayoutTxId : null;
             payment = swap.Payment;
+        }
+        // Only the transaction the exchange itself reports as the payout may settle unconfirmed, never other BTC sent to the address.
+        var trusted = false;
+        if (trust is not null && await pendingPayments.TrustPayout(entry.InvoiceId, entry.PaymentMethodId, trust))
+        {
+            lock (entry)
+                swap.PayoutTrusted = true;
+            trusted = true;
         }
         if (add && await pendingPayments.Add(entry.InvoiceId, entry.PaymentMethodId, payment.OrderNumber, payment.PendingBtc, payment.Created))
         {
@@ -457,7 +483,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                 swap.PendingRetired = true;
             return true;
         }
-        return false;
+        return trusted;
     }
 
     /// <summary>Follows every open swap, whether or not anyone is looking at the checkout. Called by <see cref="PegasusTracker"/>.</summary>
@@ -482,7 +508,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                     saved = true;
                 }
                 unsaved = entry.Swaps.Where(s => { lock (s.UnsavedTerms) return s.UnsavedTerms.Count > 0; }).ToArray();
-                unsynced = entry.Swaps.Where(s => !open.Contains(s) && (s.NeedsAdd || s.NeedsRetire || s.NeedsPayout)).ToArray();
+                unsynced = entry.Swaps.Where(s => !open.Contains(s) && (s.NeedsAdd || s.NeedsRetire || s.NeedsPayout || s.NeedsTrust)).ToArray();
                 saved |= entry.Unsaved;
             }
             foreach (var swap in unsaved)
@@ -561,6 +587,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                 swap.PendingAdded = s.PendingAdded;
                 swap.PendingRetired = s.PendingRetired;
                 swap.GaveUp = s.GaveUp;
+                swap.PayoutTxId = s.PayoutTxId;
+                swap.PayoutTrusted = s.PayoutTrusted;
                 foreach (var tx in s.LoggedTxs)
                     swap.LoggedTxs.Add(tx);
                 swap.UnsavedTerms.UnionWith(s.UnsavedTerms);
@@ -597,7 +625,9 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                     UnsavedTerms = UnsavedOf(s),
                     PendingAdded = s.PendingAdded,
                     PendingRetired = s.PendingRetired,
-                    GaveUp = s.GaveUp
+                    GaveUp = s.GaveUp,
+                    PayoutTxId = s.PayoutTxId,
+                    PayoutTrusted = s.PayoutTrusted
                 }).ToList();
             await invoiceRepository.UpdatePaymentDetails(entry.InvoiceId, entry.PaymentMethodId, Newtonsoft.Json.Linq.JObject.FromObject(parsed, DetailsSerializer));
         }

@@ -115,6 +115,15 @@ public class PegasusTests
             Added.Add((orderNumber, btc));
             return Task.FromResult(true);
         }
+        public List<string> Trusted { get; } = new();
+        /// <summary>Whether the payout's payment is on the invoice yet.</summary>
+        public bool PayoutRecorded { get; set; } = true;
+        public Task<bool> TrustPayout(string invoiceId, PaymentMethodId pmi, string txId)
+        {
+            if (PayoutRecorded)
+                Trusted.Add(txId);
+            return Task.FromResult(PayoutRecorded);
+        }
         /// <summary>Whether the order's BTC is on the invoice.</summary>
         public bool Paid { get; set; }
         public List<string> RetiredPaid { get; } = new();
@@ -293,6 +302,35 @@ public class PegasusTests
     {
         Assert.Equal("0.018727000000", MoneroCheckoutModelExtension.Xmr(0.018727m));
         Assert.Equal("0.000000000001", MoneroCheckoutModelExtension.Xmr(0.0000000000001m));
+    }
+
+    [Fact]
+    public async Task OnlyThePayoutPegasusReportsIsTrusted()
+    {
+        var pending = new FakePending { PayoutRecorded = false };
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+        fake.Status = PegasusStatus.Success;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        // The BTC is not on the invoice yet: tried again until it is, then left alone.
+        Assert.Empty(pending.Trusted);
+        pending.PayoutRecorded = true;
+        await service.FollowAll(CancellationToken.None);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("btcpayouttx", Assert.Single(pending.Trusted));
+
+        var details = new SwapToBtcPromptDetails
+        {
+            ZeroConf = true,
+            PegasusSwaps = [new PersistedPegasusSwap { OrderNumber = "O1", PayoutTxId = "AB12" }]
+        };
+        Assert.True(SwapToBtcListener.TrustedPayout(details, "ab12"));
+        Assert.False(SwapToBtcListener.TrustedPayout(details, "cd34"));
+        details.ZeroConf = false;
+        Assert.False(SwapToBtcListener.TrustedPayout(details, "ab12"));
+        Assert.True(SwapToBtcListener.IsTx("ab12-1", "AB12"));
+        Assert.False(SwapToBtcListener.IsTx("", "ab12"));
     }
 
     [Fact]
