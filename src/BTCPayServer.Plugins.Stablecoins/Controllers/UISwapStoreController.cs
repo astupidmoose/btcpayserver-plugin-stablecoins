@@ -62,6 +62,7 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             PegasusPublicKey = any.PegasusPublicKey,
             PegasusSecret = any.PegasusSecret,
             RefundMonero = any.RefundMonero,
+            MoneroZeroConf = any.MoneroZeroConf,
             Chains = chains.Select(c => new SwapChainViewModel
             {
                 Code = c.Chain.Code,
@@ -95,7 +96,8 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             IntentsSlippageBps = vm.IntentsSlippageBps,
             PegasusPublicKey = Clean(vm.PegasusPublicKey),
             PegasusSecret = Clean(vm.PegasusSecret),
-            RefundMonero = Clean(vm.RefundMonero)
+            RefundMonero = Clean(vm.RefundMonero),
+            MoneroZeroConf = vm.MoneroZeroConf
         };
         foreach (var (field, message) in SwapToBtcPaymentMethodHandler.Validate(config))
             ModelState.AddModelError(field == nameof(config.Fee) ? nameof(vm.FeePercent) : field, message);
@@ -227,6 +229,9 @@ public class SwapSettingsViewModel
 
     [Display(Name = "XMR refund address")]
     public string? RefundMonero { get; set; }
+
+    [Display(Name = "Settle as soon as the BTC is sent")]
+    public bool MoneroZeroConf { get; set; } = true;
 
     [Display(Name = "Stablecoin price tolerance (basis points)")]
     [Range(1, 1000)]

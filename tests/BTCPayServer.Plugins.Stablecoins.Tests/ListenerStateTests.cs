@@ -39,6 +39,16 @@ public class ListenerStateTests
     }
 
     [Fact]
+    public void ATrustedMoneroPayoutSettlesUnconfirmed()
+    {
+        // Whatever the speed policy, and even when it signals RBF.
+        Assert.Equal((0, PaymentStatus.Settled), SwapToBtcListener.NextState(SpeedPolicy.LowSpeed, true, 0, true, 6, zeroConf: true));
+        Assert.Equal((0, PaymentStatus.Processing), SwapToBtcListener.NextState(SpeedPolicy.LowSpeed, true, 0, true, 6));
+        // Replaced: it stops counting all the same.
+        Assert.Equal((0, PaymentStatus.Unaccounted), SwapToBtcListener.NextState(SpeedPolicy.LowSpeed, true, 0, false, 6, zeroConf: true));
+    }
+
+    [Fact]
     public void ConfirmationsAreCappedAtTheTrackedMaximum()
     {
         Assert.Equal((6, PaymentStatus.Settled), SwapToBtcListener.NextState(SpeedPolicy.LowSpeed, false, 250, true, 6));

@@ -169,6 +169,13 @@
                 <span asp-validation-for="RefundMonero" class="text-danger"></span>
                 <div class="form-text">Your own Monero wallet. XMR that Pegasus Swap cannot swap is returned here, not to the customer. Refund the customer from it.</div>
             </div>
+            <div class="form-group">
+                <div class="form-check">
+                    <input asp-for="MoneroZeroConf" type="checkbox" class="form-check-input" />
+                    <label asp-for="MoneroZeroConf" class="form-check-label"></label>
+                </div>
+                <div class="form-text">Settles a Monero order when Pegasus Swap's BTC payout reaches the mempool, without waiting for a confirmation, whatever the store's speed setting. Only Pegasus Swap pays that address and it already has the customer's XMR, so the risk is small; a payout it replaces stops counting. Pegasus Swap often pays out with a low fee, so a confirmation can take hours.</div>
+            </div>
 
             <h4 class="mt-5 mb-2">All of them</h4>
             <div class="form-group">

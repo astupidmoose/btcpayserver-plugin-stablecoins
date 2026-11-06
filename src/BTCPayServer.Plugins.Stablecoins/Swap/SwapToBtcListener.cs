@@ -114,6 +114,7 @@ public class SwapToBtcListener(
             Outpoint = id,
             RBF = rbf,
             KeyPath = keyPath,
+            ZeroConf = handler.ParsePaymentPromptDetails(invoice.GetPaymentPrompt(pmi)!.Details).ZeroConf,
             ConfirmationCount = Math.Max(0, tx?.Confirmations ?? 0)
         };
         var paymentData = new PaymentData
@@ -247,7 +248,7 @@ public class SwapToBtcListener(
                 logs.Write($"The transaction {tx.TransactionHash} has been replaced.", InvoiceEventData.EventSeverity.Warning);
                 await invoiceRepository.AddInvoiceLogs(invoice.Id, logs);
             }
-            var (confirmations, status) = NextState(invoice.SpeedPolicy, data.RBF, tx.Confirmations, accounted, Network.MaxTrackedConfirmation);
+            var (confirmations, status) = NextState(invoice.SpeedPolicy, data.RBF, tx.Confirmations, accounted, Network.MaxTrackedConfirmation, data.ZeroConf);
             if (confirmations == data.ConfirmationCount && status == payment.Status)
                 continue;
             data.ConfirmationCount = confirmations;
@@ -300,12 +301,13 @@ public class SwapToBtcListener(
     /// The payment's confirmation count and status from what the node reports now. Confirmations can go down
     /// (a reorganization), which takes a settled payment back to processing.
     /// </summary>
-    public static (int Confirmations, PaymentStatus Status) NextState(SpeedPolicy speedPolicy, bool rbf, long nodeConfirmations, bool accounted, int maxTracked)
+    public static (int Confirmations, PaymentStatus Status) NextState(SpeedPolicy speedPolicy, bool rbf, long nodeConfirmations, bool accounted, int maxTracked,
+        bool zeroConf = false)
     {
         var confirmations = (int)Math.Min(nodeConfirmations, maxTracked);
         if (!accounted)
             return (confirmations, PaymentStatus.Unaccounted);
-        return (confirmations, GetStatus(speedPolicy, new SwapToBtcPaymentData { ConfirmationCount = confirmations, RBF = rbf }));
+        return (confirmations, GetStatus(speedPolicy, new SwapToBtcPaymentData { ConfirmationCount = confirmations, RBF = rbf, ZeroConf = zeroConf }));
     }
 
     /// <summary>Same confirmation rules as BTCPay's own on-chain payments.</summary>
@@ -317,6 +319,7 @@ public class SwapToBtcListener(
         _ => 6
     };
 
+    /// <summary>A payout the store chose to trust at 0 confirmations settles once seen; it still stops counting if replaced.</summary>
     public static PaymentStatus GetStatus(SpeedPolicy speedPolicy, SwapToBtcPaymentData data) =>
-        data.ConfirmationCount >= ConfirmationRequired(speedPolicy, data.RBF) ? PaymentStatus.Settled : PaymentStatus.Processing;
+        data.ConfirmationCount >= (data.ZeroConf ? 0 : ConfirmationRequired(speedPolicy, data.RBF)) ? PaymentStatus.Settled : PaymentStatus.Processing;
 }
