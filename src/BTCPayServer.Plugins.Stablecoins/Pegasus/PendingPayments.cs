@@ -60,9 +60,6 @@ public class PendingPayments(
     public static bool Covers(IEnumerable<(DateTimeOffset Received, decimal Value)> real, DateTimeOffset since, decimal btc) =>
         real.Where(p => p.Received >= since).Sum(p => p.Value) >= btc;
 
-    static IEnumerable<(DateTimeOffset, decimal)> Real(IEnumerable<PaymentEntity> payments, SwapToBtcPaymentMethodHandler handler) =>
-        payments.Where(p => p.Accounted && !IsPending(p, handler)).Select(p => (p.ReceivedTime, p.Value));
-
     /// <summary>
     /// Real BTC that can no longer be replaced: only this retires a pending payment, which nothing would bring back if the
     /// BTC that retired it were double spent.
@@ -72,7 +69,7 @@ public class PendingPayments(
 
     /// <summary>
     /// Records the pending payment, unless it was recorded before, the invoice is no longer waiting for payment, or enough
-    /// BTC arrived since the order was made to be its payout (which must not count twice). BTC that arrived before the order
+    /// settled BTC arrived since the order was made to be its payout (which must not count twice). BTC that arrived before the order
     /// (a partial payment that this order completes), or too little since, does not stop it.
     /// </summary>
     public async Task<bool> Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated)
@@ -82,7 +79,8 @@ public class PendingPayments(
             if (!handlers.TryGetValue(pmi, out var h) || h is not SwapToBtcPaymentMethodHandler handler || btc <= 0m)
                 return true;
             var invoice = await invoiceRepository.GetInvoice(invoiceId);
-            if (invoice is null || invoice.Status != InvoiceStatus.New)
+            // Processing counts as waiting too: BTC that could still be replaced may be what made it so.
+            if (invoice is null || invoice.Status is not (InvoiceStatus.New or InvoiceStatus.Processing))
                 return true;
             var payments = invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi).ToList();
             if (payments.FirstOrDefault(p => p.Id == PaymentId(orderNumber)) is { } existing)
@@ -92,7 +90,9 @@ public class PendingPayments(
                     eventAggregator.Publish(new InvoiceNeedUpdateEvent(invoiceId));
                 return true;
             }
-            if (Covers(Real(payments, handler), orderCreated, btc))
+            // Only settled BTC stands in for the order for good; unconfirmed BTC could be replaced and leave nothing behind.
+            // Until it settles both count (the invoice is Processing either way), and the settled BTC retires this one.
+            if (Covers(Settled(payments, handler), orderCreated, btc))
                 return true;
             var data = new SwapToBtcPaymentData { PendingOrder = orderNumber };
             var paymentData = new PaymentData
