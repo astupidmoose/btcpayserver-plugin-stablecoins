@@ -497,6 +497,35 @@ public class PegasusTests
     }
 
     [Fact]
+    public async Task AnOrderGivenUpOnShowsAsFailedAndIsNotOfferedAgain()
+    {
+        var pending = new FakePending();
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+        fake.Status = PegasusStatus.Stuck;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        service.Now = () => DateTimeOffset.UtcNow.AddHours(25);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.Retired));
+        // Its pending payment no longer counts, so the checkout must not say the payment was received.
+        var status = service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.01m);
+        Assert.Equal(PegasusState.Failed, status.State);
+        Assert.Contains("O1", status.Error);
+        await service.Pending("inv1");
+        Assert.Single(fake.Created);
+
+        // A waiting order given up on is never offered for paying again: a new one is made.
+        var (service2, fake2) = Create();
+        await Ready(service2, Config(), 0.01m);
+        service2.Now = () => DateTimeOffset.UtcNow.AddHours(25);
+        await service2.FollowAll(CancellationToken.None);
+        var next = await Ready(service2, Config(), 0.01m);
+        Assert.Equal(2, fake2.Created.Count);
+        Assert.Equal("O2", next.Payment!.OrderNumber);
+    }
+
+    [Fact]
     public async Task AShortPayoutGetsANewOrderForTheRest()
     {
         var (service, fake) = Create();

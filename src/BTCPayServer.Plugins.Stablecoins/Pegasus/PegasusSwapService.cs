@@ -245,12 +245,18 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             entry.Config = config;
             // A deposit on its way stays on screen even if the amount due changed meanwhile. A finished order only for the
             // amount it was made for: after a short payout, the rest gets a new order.
+            // An order given up on (not finished within the follow window) is never offered for paying again; one still
+            // under way then shows as failed, since its pending payment no longer counts.
             var shown = entry.Swaps.LastOrDefault(s => Active(s.Payment.Status))
-                        ?? entry.Swaps.LastOrDefault(s => s.Payment.TargetSats == target && s.Payment.Status is PegasusStatus.New or PegasusStatus.Success or PegasusStatus.Refund);
+                        ?? entry.Swaps.LastOrDefault(s => s.Payment.TargetSats == target && !(s.GaveUp && s.Payment.Status == PegasusStatus.New) &&
+                                                          s.Payment.Status is PegasusStatus.New or PegasusStatus.Success or PegasusStatus.Refund);
             if (shown is not null)
             {
                 if (!shown.Final && now - shown.Payment.CheckedAt > RecheckEvery && entry.Running is not { IsCompleted: false })
                     entry.Running = Task.Run(() => Recheck(entry, shown));
+                if (shown.GaveUp && Active(shown.Payment.Status))
+                    return new(PegasusState.Failed, shown.Payment,
+                        $"Pegasus Swap order {shown.Payment.OrderNumber} has not completed. Please contact the merchant and quote this order number.");
                 return StatusOf(shown.Payment);
             }
             if (entry.Running is { IsCompleted: false } || !Restored)
