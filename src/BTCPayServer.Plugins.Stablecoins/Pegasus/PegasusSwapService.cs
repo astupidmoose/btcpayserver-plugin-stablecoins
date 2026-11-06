@@ -439,6 +439,9 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             }
             if (string.IsNullOrEmpty(tx.OrderNumber) || string.IsNullOrEmpty(tx.DepositAddress))
                 throw new PegasusException(null, "The swap has no order number or deposit address");
+            // Only a mainnet Monero address is ever shown: anything else could never be paid, or would lose the XMR.
+            if (!AddressChecks.IsMoneroAddress(tx.DepositAddress.Trim()))
+                throw new PegasusException(null, $"Pegasus Swap order {tx.OrderNumber} gave a deposit address that is not a mainnet Monero address");
             // Its BTC amount must be stated and cover what is due: an order whose payout is unknown is never shown.
             if (tx.ReceiveAmount is not > 0m)
                 throw new PegasusException(null, $"Pegasus Swap order {tx.OrderNumber} does not say how much BTC it pays");

@@ -39,6 +39,33 @@ public class PegasusTests
         public JToken? StatusOverride { get; set; }
         /// <summary>The largest XMR deposit estimates allow.</summary>
         public decimal MaxXmr { get; set; } = 500m;
+        /// <summary>Created orders give a deposit address that is not a mainnet Monero address.</summary>
+        public string? BadDepositAddress { get; set; }
+        /// <summary>Valid mainnet Monero subaddresses, one per order made.</summary>
+        static readonly string[] DepositAddresses =
+        [
+            "83vUqXTMJs8FRGghqS9kcPQDVL2hFwBDbFAMvYY3xNFZGDMDSqLzrxdDY5MooJjjccGdmQNaGK86e5yYQ4Booduw6zD3rxa",
+            "82VWYh1bLPo2UGg9njeGB7ha8n3vTaQXffDHDZ9wCMe7VAUQwG2fVhfBPudpvZ7p67GVsKpBYGtR41SWjfyQsPnLQMWpjNr",
+            "8AcycGx8EVTFjuYh6MwJVZL8AM7VTbWAdSramY2qn7NMMKcbqE59DeED37XwXzp1vobeWwaqqyFScVeupvPQKQ8Y2JQCurX",
+            "85Leh2zdVS9LmsfKeX2eCF2vUipQE1sDBjmeK9mGt5SuL2PCRc2LnfK2Sx9PEViePcCEzC4rLoPBZ5ppCC1KJFw6AQm88k9",
+            "85mC2FTdm7jJkbPfDJBDm6GyCySmnYv25bBsBfMuqPYEdF3UYW4aiVLTr6uxefb9X6G6hvQMER1YYgdefXg94yji2i9GSQX",
+            "84T9DabgfX4Zv1C39LrXhiMMb67dnx2Fc9QHYkBxApT2SCVcMxkQi5bhD7Bg2kCmWngJWRRT9oufd7c4Ninvf73fPUXngbK",
+            "87P3yYhLMRYBuS2SxStAUXciFvZPFMP98epZMd6kKtmgJPJC3Tp3abc3EYMVie16gd8ym9ZXS7ZuAHFidB1JcPEQPMbrCTn",
+            "87nzikWFtm77MABeGT5Jq2cVSBgxiQPfYjNuMrCGCUjtaQVG5S9EDneKRVV8UX3FP3KcoUufAUAJGV6tuHRe5i6L1mf5eiB",
+            "86qhsoyU4HKYRp9RJBgSiYEVZn5VC2K9CR51CnJVYcoReYqnkVo8HaH46TiTm1q4Rj1dByLHQys5z2Jg6gfFmHw236ciWAr",
+            "85WgHKVVS3HELDHDQXSj4HNCKnZpD4pvdifSCH2VBF1XBsfD6EuyGacUcppjHJqg7BQeQyK5tsWsJDCidCMWajQe2SzyMRG",
+            "86ie7JPr2JggnaNq2c6SFS3YdZekJUKzeb2SJPqnmTtcXMhR3tffnr6hJdvGjy62WqZnjHHtEfdtzbkX79thkbUGSaB1DbF",
+            "8Amh4tc6ZRjXtgZesbZYzYCU42NLyiMs3fmqjsgpQLnsWzGCwsr1tJn8HEmjHr6HaBcuTmyp4eE8pGgE8HizBYTGBpA8mBU",
+            "84qhgYkXHgCTtRyoLLffKsLAZwQEFMCDSb6Z6KmYPSba7XNQKBv5w2x8p8k8Ds38XRJ1s7ESiV3M27t9XDkkjAUKNoDoAJx",
+            "8C3xmX6YsF4KHKfREe1pDK9jMHBnQkKdFg8UA7ugbQrpG6MUsyXbbwf8FmZuNhLDysGaGxZJvwoMiBjqFbxrjJNXPMfLtZD",
+            "8A12XhSntz49KJeZKgDxy4SysDnYLT5kqTpAeQaJ5ELTaSKSRnksSZQhtqCLsbebAuXDYcAE6JtzkDmV43FhDf92ShFiz8Y",
+            "84WHPfv8kp1VFicx22RgY684j1ANMgYvnbrym85A88jLMMEijuaJgijPzaad6vX94WH6mGkHVBVJn4wXhzJERSJ6UttxNNn",
+            "8BmnuYHrC4JDZTu7FmokXe3DvCze3gyveAz2pGdCKXqk9fPAD4rXg4QfrEuLyVAcXH6LAEVLhf322Z5y7zockVKyAyPuueo",
+            "859Jd9xHeeDdUXRzHfFJw7JUPsAFL9WzjFVU4fEAjyxWg7C2KfP2jnNEVQLHQZR8ZHbAAcPWRaJ93QuD2pgD7CRbMyB3791",
+            "86yj3AGpMVSUVzqAUEm9JJXzULWKoEGfqJ3W5e6KNZrYT1nZfaBGRK5a4RpyCyie95amyHCcG5ArEJxcqBfaDQzmKBEWQvY",
+            "84fGzmb66f8i5BAnDE9WEAMXRX2sdq9PEJFn53YJj1WcbsS4hz5E8JjMpVvZpjryPvSgoJFQioiLDaKzyyZEFZwU9XzEdtK",
+        ];
+        public static string DepositAddress(int n) => DepositAddresses[n - 1];
         /// <summary>Paid-out orders leave out how much BTC they paid.</summary>
         public bool OmitPayout { get; set; }
         public const decimal BtcPerXmr = 0.004m;
@@ -77,6 +104,8 @@ public class PegasusTests
                 json = Order(Created.Count, deposit, FixedPayout ?? deposit * BtcPerXmr * (Created.Count <= ShortOrders ? PayoutShare : 1m), body["receiveAddress"]!.ToString());
                 if (OmitReceiveAddress)
                     ((JObject)json["pairs"]!["receive"]!).Remove("address");
+                if (BadDepositAddress is { } bad)
+                    json["pairs"]!["deposit"]!["address"] = bad;
                 if (OmitReceiveAmount)
                     ((JObject)json["pairs"]!["receive"]!["coin"]!).Remove("value");
             }
@@ -108,7 +137,7 @@ public class PegasusTests
             ["status"] = PegasusStatus.New,
             ["pairs"] = new JObject
             {
-                ["deposit"] = new JObject { ["coin"] = new JObject { ["name"] = "xmr", ["value"] = deposit.ToString(System.Globalization.CultureInfo.InvariantCulture), ["network"] = "XMR" }, ["address"] = "8xmrdeposit" + n, ["memo"] = null },
+                ["deposit"] = new JObject { ["coin"] = new JObject { ["name"] = "xmr", ["value"] = deposit.ToString(System.Globalization.CultureInfo.InvariantCulture), ["network"] = "XMR" }, ["address"] = DepositAddress(n), ["memo"] = null },
                 ["receive"] = new JObject { ["coin"] = new JObject { ["name"] = "btc", ["value"] = receive, ["network"] = "BTC" }, ["address"] = receiveAddress }
             }
         };
@@ -212,7 +241,7 @@ public class PegasusTests
         var status = await Ready(service, Config(), 0.01m);
 
         Assert.Equal(PegasusState.Ready, status.State);
-        Assert.Equal("8xmrdeposit1", status.Payment!.Address);
+        Assert.Equal(FakePegasus.DepositAddress(1), status.Payment!.Address);
         Assert.Equal(2.5m, status.Payment.Amount);
         Assert.Equal("O1", status.Payment.OrderNumber);
 
@@ -718,6 +747,20 @@ public class PegasusTests
         // 0.01000001 BTC is 2.5000025 XMR, asked as 2.500003: above a 2.5000025 maximum, so Monero is not offered.
         var (service, _) = Create(new FakePegasus { MaxXmr = 2.5000025m });
         Assert.Equal("Above the exchange's maximum", await service.Unavailable("store1", Config(), 0.01000001m, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task NeverShowsADepositAddressThatIsNotAMainnetMoneroAddress()
+    {
+        Assert.All(Enumerable.Range(1, 20), n => Assert.True(AddressChecks.IsMoneroAddress(FakePegasus.DepositAddress(n))));
+        // Malformed, a Bitcoin address, and a stagenet address: none is ever shown.
+        foreach (var bad in new[] { "8xmrdeposit1", BtcAddress, "5" + XmrAddress[1..] })
+        {
+            var (service, _) = Create(new FakePegasus { BadDepositAddress = bad });
+            var status = await Ready(service, Config(), 0.01m);
+            Assert.Equal(PegasusState.Failed, status.State);
+            Assert.Null(status.Payment);
+        }
     }
 
     [Fact]
