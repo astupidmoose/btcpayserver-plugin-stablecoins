@@ -134,8 +134,10 @@ public class PegasusTests
         public bool Paid { get; set; }
         public List<string> RetiredPaid { get; } = new();
         public Task RetireCovered(string invoiceId, PaymentMethodId pmi, string reason) => Task.CompletedTask;
-        public Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated)
+        public List<decimal?> PayoutsAsked { get; } = new();
+        public Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated, decimal? payoutBtc)
         {
+            PayoutsAsked.Add(payoutBtc);
             if (Paid)
                 RetiredPaid.Add(orderNumber);
             return Task.FromResult(Paid);
@@ -313,6 +315,31 @@ public class PegasusTests
     }
 
     [Fact]
+    public async Task AWaitingOrderStaysWhenOnlyTheBufferChanges()
+    {
+        var (service, fake) = Create();
+        var first = await Ready(service, Config(), 0.01m);
+        var changed = Config();
+        changed.BufferPercent += 1m;
+        var status = service.Get(changed, "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.01m);
+        await service.Pending("inv1");
+        Assert.Equal(first.Payment!.OrderNumber, status.Payment!.OrderNumber);
+        Assert.Single(fake.Created);
+    }
+
+    [Fact]
+    public async Task UnreadableSavedOrdersHoldBackOnlyTheirInvoice()
+    {
+        var (service, fake) = Create();
+        Assert.ThrowsAny<Exception>(() => service.Restore("bad", "store1", Monero.PaymentMethodId, Config(),
+            new[] { new PersistedPegasusSwap { OrderNumber = "OX", Address = "8x", Amount = "not a number" } }));
+        Assert.Equal(PegasusState.Preparing, (await Ready(service, Config(), 0.01m, "bad")).State);
+        Assert.Empty(fake.Created);
+        Assert.Equal(PegasusState.Ready, (await Ready(service, Config(), 0.01m, "good")).State);
+        Assert.Single(fake.Created);
+    }
+
+    [Fact]
     public async Task AnOrderWithAnUnknownStatusStaysOnScreen()
     {
         var (service, fake) = Create();
@@ -320,8 +347,12 @@ public class PegasusTests
         fake.Status = 99;
         service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
         await service.FollowAll(CancellationToken.None);
-        // Never a second deposit address while the first may have been paid, even for another amount due.
-        Assert.Equal("O1", service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.005m).Payment!.OrderNumber);
+        // Never a second deposit address while the first may have been paid, even for another amount due, and never
+        // "received" either: nothing holds the invoice for a status this code does not know.
+        var shown = service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.005m);
+        Assert.Equal("O1", shown.Payment!.OrderNumber);
+        Assert.Equal(PegasusState.Failed, shown.State);
+        Assert.Contains("O1", shown.Error);
         await service.Pending("inv1");
         Assert.Single(fake.Created);
     }
@@ -476,6 +507,9 @@ public class PegasusTests
         await service.FollowAll(CancellationToken.None);
         await service.FollowAll(CancellationToken.None);
         Assert.Equal("O1", Assert.Single(pending.RetiredPaid));
+        // What Pegasus says it paid out decides how much BTC retires the pending payment.
+        Assert.NotEmpty(pending.PayoutsAsked);
+        Assert.True(pending.PayoutsAsked[^1] > 0m);
     }
 
     [Fact]

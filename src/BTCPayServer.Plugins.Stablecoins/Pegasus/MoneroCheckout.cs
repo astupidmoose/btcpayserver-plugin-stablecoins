@@ -67,8 +67,15 @@ public class MoneroCheckoutModelExtension(
         }
         // The invoice's saved orders first: an invoice idle long enough to be dropped from memory must not get a second
         // deposit address while its first order may still be under way. Orders already followed are left as they are.
-        if (context.Prompt.Details is { } details && handler.ParsePaymentPromptDetails(details).PegasusSwaps is { Count: > 0 } saved)
-            swaps.Restore(invoice.Id, context.Store.Id, handler.PaymentMethodId, config, saved);
+        try
+        {
+            if (context.Prompt.Details is { } details && handler.ParsePaymentPromptDetails(details).PegasusSwaps is { Count: > 0 } saved)
+                swaps.Restore(invoice.Id, context.Store.Id, handler.PaymentMethodId, config, saved);
+        }
+        catch (Exception)
+        {
+            // Unreadable saved orders: the service makes no new order for this invoice until they can be read.
+        }
         var status = swaps.Get(config, context.Store.Id, handler.PaymentMethodId, invoice.Id, btcAddress, accounting.Due);
         data["state"] = status.State.ToString().ToLowerInvariant();
         data["error"] = status.Error;

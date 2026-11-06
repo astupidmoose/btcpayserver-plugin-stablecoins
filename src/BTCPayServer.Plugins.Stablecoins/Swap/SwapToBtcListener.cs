@@ -258,6 +258,9 @@ public class SwapToBtcListener(
         if (changed.Count == 0)
             return;
         await paymentService.UpdatePayments(changed);
+        // BTC that just settled may cover a pending Monero payment (only settled BTC retires one).
+        if (changed.Any(p => p.Status == PaymentStatus.Settled))
+            await pendingPayments.RetireCovered(invoice.Id, handler.PaymentMethodId, "the BTC that replaces it settled");
         // Labeling is idempotent: redoing it as confirmations change repairs a label that failed when the payment arrived.
         foreach (var hash in changed.Select(p => OutPoint.Parse(handler.ParsePaymentDetails(p.Details).Outpoint).Hash).Distinct())
             await LabelTransaction(invoice, hash);

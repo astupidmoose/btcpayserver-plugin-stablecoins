@@ -21,13 +21,16 @@ public interface IPendingPayments
     /// <summary>False when it could not be done and should be tried again; true when done or not needed.</summary>
     Task<bool> Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason);
     /// <summary>
-    /// Retires the order's pending payment if BTC covering it arrived on the invoice since the order was made. True when it no longer
-    /// counts (retired now or before, or there is none); false when the BTC has not arrived yet or the write failed.
+    /// Retires the order's pending payment once settled BTC covering it arrived on the invoice since the order was made:
+    /// what the exchange says it paid out (<paramref name="payoutBtc"/>) when it says so, so a short payout lets the
+    /// customer pay the rest, otherwise the pending amount. True when it no longer counts (retired now or before, or there
+    /// is none); false when the BTC has not arrived or settled yet, or the write failed.
     /// </summary>
-    Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated);
+    Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated, decimal? payoutBtc);
     /// <summary>
-    /// Retires each pending payment that the BTC received since it was recorded covers in full. Other BTC reaching the
-    /// address (a direct payment, a late payout of an older order) leaves a larger pending payment in place.
+    /// Retires each pending payment that the settled BTC received since it was recorded covers in full. Other BTC reaching
+    /// the address (a direct payment, a late payout of an older order) leaves a larger pending payment in place, and BTC
+    /// that could still be replaced does not count until it settles.
     /// </summary>
     Task RetireCovered(string invoiceId, PaymentMethodId pmi, string reason);
 }
@@ -59,6 +62,13 @@ public class PendingPayments(
 
     static IEnumerable<(DateTimeOffset, decimal)> Real(IEnumerable<PaymentEntity> payments, SwapToBtcPaymentMethodHandler handler) =>
         payments.Where(p => p.Accounted && !IsPending(p, handler)).Select(p => (p.ReceivedTime, p.Value));
+
+    /// <summary>
+    /// Real BTC that can no longer be replaced: only this retires a pending payment, which nothing would bring back if the
+    /// BTC that retired it were double spent.
+    /// </summary>
+    static IEnumerable<(DateTimeOffset, decimal)> Settled(IEnumerable<PaymentEntity> payments, SwapToBtcPaymentMethodHandler handler) =>
+        payments.Where(p => p.Status == PaymentStatus.Settled && !IsPending(p, handler)).Select(p => (p.ReceivedTime, p.Value));
 
     /// <summary>
     /// Records the pending payment, unless it was recorded before, the invoice is no longer waiting for payment, or enough
@@ -152,7 +162,7 @@ public class PendingPayments(
             if (invoice is null)
                 return;
             var payments = invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi && p.Accounted).ToList();
-            var real = Real(payments, handler).ToList();
+            var real = Settled(payments, handler).ToList();
             foreach (var pending in payments.Where(p => IsPending(p, handler)))
             {
                 if (Covers(real, pending.ReceivedTime, pending.Value))
@@ -166,7 +176,7 @@ public class PendingPayments(
         }
     }
 
-    public async Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated)
+    public async Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated, decimal? payoutBtc)
     {
         try
         {
@@ -178,7 +188,7 @@ public class PendingPayments(
             var payments = invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi).ToList();
             if (payments.FirstOrDefault(p => p.Id == PaymentId(orderNumber)) is not { Accounted: true } pending)
                 return true;
-            if (!Covers(Real(payments, handler), orderCreated, pending.Value))
+            if (!Covers(Settled(payments, handler), orderCreated, payoutBtc is > 0m and var paid ? Math.Min(paid, pending.Value) : pending.Value))
                 return false;
             return await Retire(invoiceId, pmi, orderNumber, $"the BTC of Pegasus Swap order {orderNumber} arrived");
         }
