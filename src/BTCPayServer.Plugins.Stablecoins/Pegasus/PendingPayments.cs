@@ -16,17 +16,13 @@ namespace BTCPayServer.Plugins.Stablecoins.Pegasus;
 
 public interface IPendingPayments
 {
-    /// <summary>False when it could not be done and should be tried again; true when done or not needed.</summary>
-    Task<bool> Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated);
+    /// <summary>
+    /// Records the order's pending payment, or makes it count again, while settled BTC does not cover the order; retires it
+    /// once settled BTC does. False when it could not be done and should be tried again; true when done or not needed.
+    /// </summary>
+    Task<bool> Sync(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated, decimal? payoutBtc, bool first);
     /// <summary>False when it could not be done and should be tried again; true when done or not needed.</summary>
     Task<bool> Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason);
-    /// <summary>
-    /// Retires the order's pending payment once settled BTC covering it arrived on the invoice since the order was made:
-    /// what the exchange says it paid out (<paramref name="payoutBtc"/>) when it says so, so a short payout lets the
-    /// customer pay the rest, otherwise the pending amount. True when it no longer counts (retired now or before, or there
-    /// is none); false when the BTC has not arrived or settled yet, or the write failed.
-    /// </summary>
-    Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated, decimal? payoutBtc);
     /// <summary>
     /// Retires each pending payment that the settled BTC received since it was recorded covers in full. Other BTC reaching
     /// the address (a direct payment, a late payout of an older order) leaves a larger pending payment in place, and BTC
@@ -68,32 +64,48 @@ public class PendingPayments(
         payments.Where(p => p.Status == PaymentStatus.Settled && !IsPending(p, handler)).Select(p => (p.ReceivedTime, p.Value));
 
     /// <summary>
-    /// Records the pending payment, unless it was recorded before, the invoice is no longer waiting for payment, or enough
-    /// settled BTC arrived since the order was made to be its payout (which must not count twice). BTC that arrived before the order
-    /// (a partial payment that this order completes), or too little since, does not stop it.
+    /// Brings the order's pending payment in line with the BTC on the invoice. It counts while the settled BTC received
+    /// since the order was made does not cover the order (what the exchange says it paid out when it says so, so a short
+    /// payout lets the customer pay the rest, otherwise <paramref name="btc"/>), and stops counting once it does. Settled
+    /// BTC can still be demoted (a reorganization): the pending payment then counts again while the invoice still waits
+    /// for payment. Unconfirmed BTC never stands in for it, since it could be replaced. Only on an invoice still waiting
+    /// for payment (New, or Processing, which BTC that could still be replaced may have caused) is a pending payment
+    /// recorded or made to count again. Safe to call any number of times.
     /// </summary>
-    public async Task<bool> Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated)
+    public async Task<bool> Sync(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated,
+        decimal? payoutBtc, bool first)
     {
         try
         {
             if (!handlers.TryGetValue(pmi, out var h) || h is not SwapToBtcPaymentMethodHandler handler || btc <= 0m)
                 return true;
             var invoice = await invoiceRepository.GetInvoice(invoiceId);
-            // Processing counts as waiting too: BTC that could still be replaced may be what made it so.
-            if (invoice is null || invoice.Status is not (InvoiceStatus.New or InvoiceStatus.Processing))
+            if (invoice is null)
                 return true;
             var payments = invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi).ToList();
-            if (payments.FirstOrDefault(p => p.Id == PaymentId(orderNumber)) is { } existing)
+            var existing = payments.FirstOrDefault(p => p.Id == PaymentId(orderNumber));
+            var need = payoutBtc is > 0m and var paid ? Math.Min(paid, btc) : btc;
+            if (Covers(Settled(payments, handler), orderCreated, need))
+                return existing is not { Accounted: true } ||
+                       await Retire(invoiceId, pmi, orderNumber, $"the BTC of Pegasus Swap order {orderNumber} arrived and settled");
+            var waiting = invoice.Status is InvoiceStatus.New or InvoiceStatus.Processing;
+            if (existing is { Accounted: true })
             {
                 // Recorded by an earlier try that failed afterwards: make sure the invoice is looked at again.
-                if (existing.Accounted)
+                if (first)
                     eventAggregator.Publish(new InvoiceNeedUpdateEvent(invoiceId));
                 return true;
             }
-            // Only settled BTC stands in for the order for good; unconfirmed BTC could be replaced and leave nothing behind.
-            // Until it settles both count (the invoice is Processing either way), and the settled BTC retires this one.
-            if (Covers(Settled(payments, handler), orderCreated, btc))
+            if (!waiting)
                 return true;
+            if (existing is not null)
+            {
+                existing.Status = PaymentStatus.Processing;
+                await paymentService.UpdatePayments([existing]);
+                eventAggregator.Publish(new InvoiceNeedUpdateEvent(invoiceId));
+                await Log(invoiceId, $"Pending payment of Pegasus Swap order {orderNumber} counted again: the BTC that replaced it no longer counts as settled.");
+                return true;
+            }
             var data = new SwapToBtcPaymentData { PendingOrder = orderNumber };
             var paymentData = new PaymentData
             {
@@ -109,12 +121,12 @@ public class PendingPayments(
             // The event first: the invoice turns Processing even if the log write below fails.
             eventAggregator.Publish(new InvoiceEvent(await invoiceRepository.GetInvoice(invoiceId) ?? invoice, InvoiceEvent.ReceivedPayment) { Payment = payment });
             await Log(invoiceId, $"Pegasus Swap order {orderNumber} received the customer's XMR. Recorded as a pending payment of {btc} BTC " +
-                                 "until the BTC arrives; it never settles on its own.");
+                                 "until the BTC arrives and settles; it never settles on its own.");
             return true;
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not record the pending Monero payment of invoice {InvoiceId}; trying again later", invoiceId);
+            logger.LogWarning(ex, "Could not update the pending Monero payment of invoice {InvoiceId}; trying again later", invoiceId);
             return false;
         }
     }
@@ -173,29 +185,6 @@ public class PendingPayments(
         {
             // The swap follower retires it later (once the order has paid out), so nothing is lost.
             logger.LogWarning(ex, "Could not retire the pending Monero payments of invoice {InvoiceId}", invoiceId);
-        }
-    }
-
-    public async Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated, decimal? payoutBtc)
-    {
-        try
-        {
-            if (!handlers.TryGetValue(pmi, out var h) || h is not SwapToBtcPaymentMethodHandler handler)
-                return true;
-            var invoice = await invoiceRepository.GetInvoice(invoiceId);
-            if (invoice is null)
-                return true;
-            var payments = invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi).ToList();
-            if (payments.FirstOrDefault(p => p.Id == PaymentId(orderNumber)) is not { Accounted: true } pending)
-                return true;
-            if (!Covers(Settled(payments, handler), orderCreated, payoutBtc is > 0m and var paid ? Math.Min(paid, pending.Value) : pending.Value))
-                return false;
-            return await Retire(invoiceId, pmi, orderNumber, $"the BTC of Pegasus Swap order {orderNumber} arrived");
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Could not check the pending Monero payment of invoice {InvoiceId}; trying again later", invoiceId);
-            return false;
         }
     }
 

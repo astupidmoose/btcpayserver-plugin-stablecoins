@@ -122,26 +122,39 @@ public class PegasusTests
         /// <summary>This many calls fail (the database did not answer) before they succeed.</summary>
         public int Failures { get; set; }
         public int Calls { get; private set; }
-        public Task<bool> Add(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated)
+        /// <summary>Whether settled BTC covering the order is on the invoice.</summary>
+        public bool Paid { get; set; }
+        public List<string> RetiredPaid { get; } = new();
+        /// <summary>Pending payments made to count again after the BTC that retired them was demoted.</summary>
+        public List<string> Reinstated { get; } = new();
+        public List<decimal?> PayoutsAsked { get; } = new();
+        readonly Dictionary<string, bool> _counting = new();
+        public Task<bool> Sync(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated, decimal? payoutBtc, bool first)
         {
             Calls++;
             if (Failures > 0 && Failures-- > 0)
                 return Task.FromResult(false);
-            Added.Add((orderNumber, btc));
+            PayoutsAsked.Add(payoutBtc);
+            var exists = _counting.TryGetValue(orderNumber, out var counting);
+            if (Paid)
+            {
+                if (counting)
+                    RetiredPaid.Add(orderNumber);
+                _counting[orderNumber] = false;
+            }
+            else if (!exists)
+            {
+                Added.Add((orderNumber, btc));
+                _counting[orderNumber] = true;
+            }
+            else if (!counting)
+            {
+                Reinstated.Add(orderNumber);
+                _counting[orderNumber] = true;
+            }
             return Task.FromResult(true);
         }
-        /// <summary>Whether the order's BTC is on the invoice.</summary>
-        public bool Paid { get; set; }
-        public List<string> RetiredPaid { get; } = new();
         public Task RetireCovered(string invoiceId, PaymentMethodId pmi, string reason) => Task.CompletedTask;
-        public List<decimal?> PayoutsAsked { get; } = new();
-        public Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated, decimal? payoutBtc)
-        {
-            PayoutsAsked.Add(payoutBtc);
-            if (Paid)
-                RetiredPaid.Add(orderNumber);
-            return Task.FromResult(Paid);
-        }
         public Task<bool> Retire(string invoiceId, PaymentMethodId pmi, string? orderNumber, string reason)
         {
             Calls++;
@@ -635,6 +648,57 @@ public class PegasusTests
 
         fake.MinimumError = null;
         Assert.Null(await service.Unavailable("store1", Config(), 0.01m, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task MoneroIsUnavailableOutsideTheLimitsInAnEstimate()
+    {
+        // The estimate succeeds but states limits (0.05 to 500 XMR): 0.0001 BTC is 0.025 XMR, 3 BTC is 750 XMR.
+        var (service, _) = Create();
+        Assert.Equal("Below the exchange's minimum", await service.Unavailable("store1", Config(), 0.0001m, CancellationToken.None));
+        Assert.Equal("Above the exchange's maximum", await service.Unavailable("store1", Config(), 3m, CancellationToken.None));
+        Assert.Null(await service.Unavailable("store1", Config(), 0.01m, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task APendingPaymentCountsAgainWhenTheBtcThatRetiredItIsDemoted()
+    {
+        var pending = new FakePending();
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+        fake.Status = PegasusStatus.Success;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Single(pending.Added);
+
+        pending.Paid = true;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(3);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.RetiredPaid));
+
+        // A reorganization demotes the BTC: the order's pending payment counts again.
+        pending.Paid = false;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(5);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.Reinstated));
+    }
+
+    [Fact]
+    public async Task APaidOutOrderWhoseBtcNeverCameShowsAsFailedOnceGivenUp()
+    {
+        var pending = new FakePending();
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+        fake.Status = PegasusStatus.Success;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal(PegasusState.Received, service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.01m).State);
+        service.Now = () => DateTimeOffset.UtcNow.AddHours(25);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.Retired));
+        var status = service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.01m);
+        Assert.Equal(PegasusState.Failed, status.State);
+        Assert.Contains("O1", status.Error);
     }
 
     [Fact]
