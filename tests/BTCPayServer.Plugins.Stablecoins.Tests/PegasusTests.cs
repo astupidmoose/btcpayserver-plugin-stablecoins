@@ -39,6 +39,8 @@ public class PegasusTests
         public JToken? StatusOverride { get; set; }
         /// <summary>The largest XMR deposit estimates allow.</summary>
         public decimal MaxXmr { get; set; } = 500m;
+        /// <summary>Paid-out orders leave out how much BTC they paid.</summary>
+        public bool OmitPayout { get; set; }
         public const decimal BtcPerXmr = 0.004m;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -91,7 +93,7 @@ public class PegasusTests
                     json["status"] = bad;
                 if (Status != PegasusStatus.New)
                     json["txId"] = "xmrdeposittx";
-                if (Status == PegasusStatus.Success)
+                if (Status == PegasusStatus.Success && !OmitPayout)
                     json["receiveTransaction"] = new JObject { ["txId"] = "btcpayouttx", ["amount"] = deposit * BtcPerXmr };
             }
             else
@@ -527,6 +529,36 @@ public class PegasusTests
         // What Pegasus says it paid out decides how much BTC retires the pending payment.
         Assert.NotEmpty(pending.PayoutsAsked);
         Assert.True(pending.PayoutsAsked[^1] > 0m);
+    }
+
+    [Fact]
+    public async Task APaidOutOrderIsAskedAgainUntilItSaysHowMuchItPaid()
+    {
+        var pending = new FakePending();
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+        fake.Status = PegasusStatus.Success;
+        fake.OmitPayout = true;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Single(pending.Added);
+        Assert.All(pending.PayoutsAsked, p => Assert.Null(p));
+        var asked = fake.Requests.Count(r => r.RequestUri!.AbsolutePath == "/api/private/get-transaction");
+
+        // The payout amount shows up later: the order is still asked about, and the amount reaches the pending payment.
+        fake.OmitPayout = false;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(3);
+        await service.FollowAll(CancellationToken.None);
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(5);
+        await service.FollowAll(CancellationToken.None);
+        Assert.True(fake.Requests.Count(r => r.RequestUri!.AbsolutePath == "/api/private/get-transaction") > asked);
+        Assert.True(pending.PayoutsAsked[^1] > 0m);
+
+        // Once it has, it is not asked again.
+        asked = fake.Requests.Count(r => r.RequestUri!.AbsolutePath == "/api/private/get-transaction");
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(7);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal(asked, fake.Requests.Count(r => r.RequestUri!.AbsolutePath == "/api/private/get-transaction"));
     }
 
     [Fact]

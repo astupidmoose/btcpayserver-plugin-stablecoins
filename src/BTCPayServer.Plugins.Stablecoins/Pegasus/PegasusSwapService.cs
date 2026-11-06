@@ -120,6 +120,11 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         public readonly HashSet<string> LoggedTxs = new(StringComparer.OrdinalIgnoreCase);
         public readonly HashSet<string> UnsavedTerms = new(StringComparer.OrdinalIgnoreCase);
         public bool Final => Payment.Status is PegasusStatus.Success or PegasusStatus.Refund;
+        /// <summary>
+        /// Still asked about: not finished, or paid out without saying how much while its pending payment counts (the
+        /// amount decides how much settled BTC retires it, so a short payout is not held to the full promised amount).
+        /// </summary>
+        public bool Polled => !Final || Watched && Payment.Status == PegasusStatus.Success && Payment.PayoutBtc is null;
         /// <summary>Followed for its full time: its pending payment, if any, stops counting.</summary>
         public bool GaveUp;
         public bool PendingAdded;
@@ -159,6 +164,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         public DateTimeOffset Touched;
         /// <summary>The last save failed: <see cref="FollowAll"/> saves again, and the entry is kept until it succeeds.</summary>
         public bool Unsaved;
+        /// <summary>Taken out of <see cref="_entries"/> by <see cref="Forget"/>: callers holding it get the current one instead.</summary>
+        public bool Removed;
     }
 
     readonly ConcurrentDictionary<string, Entry> _entries = new();
@@ -275,9 +282,9 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         var target = TargetUnits(btcDue, config.BufferPercent);
         var due = TargetUnits(btcDue, 0m);
         var now = Now();
-        var entry = _entries.GetOrAdd(invoiceId, _ => new Entry { InvoiceId = invoiceId, StoreId = storeId, PaymentMethodId = pmi });
         PegasusSwapStatus result;
-        lock (entry)
+        var entry = Enter(invoiceId, storeId, pmi);
+        try
         {
             entry.Touched = now;
             entry.Config = config;
@@ -290,7 +297,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                                                           s.Payment.Status is PegasusStatus.New or PegasusStatus.Success or PegasusStatus.Refund);
             if (shown is not null)
             {
-                if (!shown.Final && now - shown.Payment.CheckedAt > RecheckEvery && entry.Running is not { IsCompleted: false })
+                if (shown.Polled && now - shown.Payment.CheckedAt > RecheckEvery && entry.Running is not { IsCompleted: false })
                     entry.Running = Task.Run(() => Recheck(entry, shown));
                 if (shown.GaveUp && shown.Payment.Status != PegasusStatus.Refund)
                     return new(PegasusState.Failed, shown.Payment,
@@ -307,6 +314,10 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             entry.Error = null;
             entry.Running = Task.Run(() => Prepare(entry, btcAddress, target, due));
             result = new(PegasusState.Preparing, null, null);
+        }
+        finally
+        {
+            Monitor.Exit(entry);
         }
         Forget(now);
         return result;
@@ -588,7 +599,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             {
                 if (entry.Running is { IsCompleted: false })
                     return;
-                open = entry.Swaps.Where(s => !s.Final && now - s.Payment.Created < FollowFor && now - s.Payment.CheckedAt > RecheckEvery).ToArray();
+                open = entry.Swaps.Where(s => s.Polled && now - s.Payment.Created < FollowFor && now - s.Payment.CheckedAt > RecheckEvery).ToArray();
                 // A day on, an order that never paid out stops holding the invoice in Processing.
                 foreach (var s in entry.Swaps.Where(s => !s.GaveUp && now - s.Payment.Created >= FollowFor))
                 {
@@ -703,14 +714,18 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             _unrestored[invoiceId] = 0;
             throw;
         }
-        var entry = _entries.GetOrAdd(invoiceId, _ => new Entry { InvoiceId = invoiceId, StoreId = storeId, PaymentMethodId = pmi });
-        lock (entry)
+        var entry = Enter(invoiceId, storeId, pmi);
+        try
         {
             entry.Config = config;
             entry.Touched = Now();
             foreach (var swap in swaps)
                 if (!entry.Swaps.Any(e => e.Payment.OrderNumber == swap.Payment.OrderNumber))
                     entry.Swaps.Add(swap);
+        }
+        finally
+        {
+            Monitor.Exit(entry);
         }
         _unrestored.TryRemove(invoiceId, out _);
     }
@@ -823,15 +838,36 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         }
     }
 
+    /// <summary>
+    /// The invoice's entry, locked (the caller exits it). One that <see cref="Forget"/> took out after it was looked up is
+    /// never used: the current one is, so no checkout works on an entry the tracker no longer sees.
+    /// </summary>
+    Entry Enter(string invoiceId, string storeId, PaymentMethodId pmi)
+    {
+        while (true)
+        {
+            var entry = _entries.GetOrAdd(invoiceId, _ => new Entry { InvoiceId = invoiceId, StoreId = storeId, PaymentMethodId = pmi });
+            Monitor.Enter(entry);
+            if (!entry.Removed)
+                return entry;
+            Monitor.Exit(entry);
+        }
+    }
+
     void Forget(DateTimeOffset now)
     {
         foreach (var (key, entry) in _entries.ToArray())
         {
-            bool done;
+            // Checked and taken out under the entry's lock, and only if this same entry is still the one mapped, so a
+            // checkout that touched it meanwhile, or a replacement put in its place, is never taken out.
             lock (entry)
-                done = now - entry.Touched > ForgetAfter && !entry.Unsaved && entry.Swaps.All(s => s.Done && UnsavedOf(s).Length == 0);
-            if (done)
-                _entries.TryRemove(key, out _);
+            {
+                if (entry.Removed || now - entry.Touched <= ForgetAfter || entry.Unsaved || entry.Running is { IsCompleted: false } ||
+                    !entry.Swaps.All(s => s.Done && UnsavedOf(s).Length == 0))
+                    continue;
+                if (_entries.TryRemove(new KeyValuePair<string, Entry>(key, entry)))
+                    entry.Removed = true;
+            }
         }
     }
 }
