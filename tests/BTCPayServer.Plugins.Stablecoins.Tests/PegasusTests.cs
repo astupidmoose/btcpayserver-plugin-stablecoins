@@ -28,6 +28,8 @@ public class PegasusTests
         /// <summary>Every order pays this much BTC, whatever is deposited (the rate keeps worsening).</summary>
         public decimal? FixedPayout { get; set; }
         public bool SwapEstimateFields { get; set; }
+        /// <summary>Created orders leave out where they pay.</summary>
+        public bool OmitReceiveAddress { get; set; }
         public const decimal BtcPerXmr = 0.004m;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -62,6 +64,8 @@ public class PegasusTests
                 Created.Add(body);
                 var deposit = body["depositAmount"]!.Value<decimal>();
                 json = Order(Created.Count, deposit, FixedPayout ?? deposit * BtcPerXmr * (Created.Count <= ShortOrders ? PayoutShare : 1m), body["receiveAddress"]!.ToString());
+                if (OmitReceiveAddress)
+                    ((JObject)json["pairs"]!["receive"]!).Remove("address");
             }
             else if (path == "/api/private/get-transaction")
             {
@@ -293,6 +297,29 @@ public class PegasusTests
     {
         Assert.Equal("0.018727000000", MoneroCheckoutModelExtension.Xmr(0.018727m));
         Assert.Equal("0.000000000001", MoneroCheckoutModelExtension.Xmr(0.0000000000001m));
+    }
+
+    [Fact]
+    public async Task AnOrderWithAnUnknownStatusStaysOnScreen()
+    {
+        var (service, fake) = Create();
+        await Ready(service, Config(), 0.01m);
+        fake.Status = 99;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        // Never a second deposit address while the first may have been paid, even for another amount due.
+        Assert.Equal("O1", service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.005m).Payment!.OrderNumber);
+        await service.Pending("inv1");
+        Assert.Single(fake.Created);
+    }
+
+    [Fact]
+    public async Task AnOrderThatDoesNotConfirmTheBtcAddressIsNotShown()
+    {
+        var (service, _) = Create(new FakePegasus { OmitReceiveAddress = true });
+        var status = await Ready(service, Config(), 0.01m);
+        Assert.Equal(PegasusState.Failed, status.State);
+        Assert.Null(status.Payment);
     }
 
     [Fact]

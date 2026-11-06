@@ -238,7 +238,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             entry.Config = config;
             // A deposit on its way stays on screen even if the amount due changed meanwhile. A finished order only for the
             // amount it was made for: after a short payout, the rest gets a new order.
-            var shown = entry.Swaps.LastOrDefault(s => InProgress(s.Payment.Status))
+            var shown = entry.Swaps.LastOrDefault(s => Active(s.Payment.Status))
                         ?? entry.Swaps.LastOrDefault(s => s.Payment.TargetSats == target && s.Payment.Status is PegasusStatus.New or PegasusStatus.Success or PegasusStatus.Refund);
             if (shown is not null)
             {
@@ -264,6 +264,13 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
     /// <summary>The exchange has the customer's XMR and has not finished: confirming, swapping, paying out, or held up (error, pause, stuck).</summary>
     static bool InProgress(int status) => status is PegasusStatus.Confirmation or PegasusStatus.Exchanging or PegasusStatus.Sending
         or PegasusStatus.Error or PegasusStatus.Pause or PegasusStatus.Stuck;
+
+    /// <summary>
+    /// An order that stays on screen whatever the amount due: in progress, or a status this code does not know. Unknown
+    /// statuses fail closed (no second deposit address while the customer may have paid the first); only the known
+    /// waiting, finished and replaceable statuses let another order be made.
+    /// </summary>
+    static bool Active(int status) => status is not (PegasusStatus.New or PegasusStatus.Success or PegasusStatus.Refund or PegasusStatus.Overdue);
 
     /// <summary>The exchange has the customer's XMR (or already paid out).</summary>
     static bool Received(int status) => InProgress(status) || status == PegasusStatus.Success;
@@ -350,8 +357,11 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             }
             if (string.IsNullOrEmpty(tx.OrderNumber) || string.IsNullOrEmpty(tx.DepositAddress))
                 throw new PegasusException(null, "The swap has no order number or deposit address");
-            if (tx.ReceiveAddress is { Length: > 0 } to && to != btcAddress)
-                throw new PegasusException(null, $"The swap pays {to}, not this invoice's address {btcAddress}");
+            // The order must confirm it pays this invoice's address before its deposit address is shown.
+            if (tx.ReceiveAddress != btcAddress)
+                throw new PegasusException(null, string.IsNullOrEmpty(tx.ReceiveAddress)
+                    ? $"The swap does not say where it pays; expected this invoice's address {btcAddress}"
+                    : $"The swap pays {tx.ReceiveAddress}, not this invoice's address {btcAddress}");
             var amount = tx.DepositAmount is > 0m and var a ? RoundUp(a, AmountDecimals) : request.DepositAmount;
             var now = Now();
             var payment = new PegasusPayment(tx.OrderNumber, tx.DepositAddress, tx.DepositMemo, amount, target, tx.Status, now, now, tx.ReceiveAmount);
@@ -491,8 +501,21 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                 saved |= await SyncPending(entry, swap);
             if (saved)
                 await Save(entry);
-            foreach (var swap in open)
-                await Recheck(entry, swap);
+            if (open.Length == 0)
+                continue;
+            // Through the same per-invoice gate as the checkout's rechecks, so two answers for one order never race.
+            Task run;
+            lock (entry)
+            {
+                if (entry.Running is { IsCompleted: false })
+                    continue;
+                run = entry.Running = Task.Run(async () =>
+                {
+                    foreach (var swap in open)
+                        await Recheck(entry, swap);
+                });
+            }
+            await run;
         }
         Forget(now);
     }
