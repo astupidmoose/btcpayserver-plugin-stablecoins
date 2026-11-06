@@ -45,7 +45,7 @@ Payment method ids use underscores, not dashes: some store integrations send the
 - **A LI.FI route fails:** the bridge returns the funds to the customer's wallet on the source chain.
 - **An exchange deposit NEAR Intents cannot swap** (too little, too late): it goes to the store's refund address on that network; refund the customer from there.
 - **A Monero payment Pegasus Swap cannot swap:** it goes to the store's XMR refund address; refund the customer from there. An order that is held up (error, pause, stuck) is logged as a warning; contact Pegasus Swap with the order number.
-- **Late BTC:** recorded as paid late, like late on-chain BTC.
+- **Late BTC:** recorded as paid late, like late on-chain BTC. XMR that Pegasus Swap only reports after the invoice expired (even if it was sent just before) is recorded the same way, as soon as Pegasus reports it, with a warning in the invoice log: mark the invoice settled once the BTC arrives if the customer paid in time.
 
 For support, the invoice log records:
 

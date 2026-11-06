@@ -237,9 +237,11 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             var xmr = DepositFromEstimate(estimate, target) ?? 0m;
             if (xmr <= 0m)
                 return "The exchange gave no usable estimate";
-            if (estimate.MinAmount is > 0m and var min && xmr < min)
+            // Checked on the amount the order would ask (rounded up, as the checkout does), not the raw estimate.
+            var asked = RoundUp(xmr, AmountDecimals);
+            if (estimate.MinAmount is > 0m and var min && asked < min)
                 return "Below the exchange's minimum";
-            if (estimate.MaxAmount is > 0m and var max && xmr > max)
+            if (estimate.MaxAmount is > 0m and var max && asked > max)
                 return "Above the exchange's maximum";
             foreach (var (key, old) in _estimates.ToArray())
                 if (now - old.At >= EstimateFor)

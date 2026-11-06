@@ -713,6 +713,14 @@ public class PegasusTests
     }
 
     [Fact]
+    public async Task TheLimitsAreCheckedOnTheRoundedXmrAmount()
+    {
+        // 0.01000001 BTC is 2.5000025 XMR, asked as 2.500003: above a 2.5000025 maximum, so Monero is not offered.
+        var (service, _) = Create(new FakePegasus { MaxXmr = 2.5000025m });
+        Assert.Equal("Above the exchange's maximum", await service.Unavailable("store1", Config(), 0.01000001m, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task MoneroIsUnavailableWhenTheEstimateGivesNoXmrAmount()
     {
         var (service, _) = Create(new FakePegasus { OmitEstimateXmr = true });

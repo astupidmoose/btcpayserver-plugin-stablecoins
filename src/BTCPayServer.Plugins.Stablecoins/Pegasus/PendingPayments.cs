@@ -68,9 +68,12 @@ public class PendingPayments(
     /// since the order was made does not cover the order (what the exchange says it paid out when it says so, so a short
     /// payout lets the customer pay the rest, otherwise <paramref name="btc"/>), and stops counting once it does. Settled
     /// BTC can still be demoted (a reorganization): the pending payment then counts again while the invoice still waits
-    /// for payment. Unconfirmed BTC never stands in for it, since it could be replaced. Only on an invoice still waiting
-    /// for payment (New, or Processing, which BTC that could still be replaced may have caused) is a pending payment
-    /// recorded or made to count again. Safe to call any number of times.
+    /// for payment. Unconfirmed BTC never stands in for it, since it could be replaced. A pending payment is recorded or
+    /// made to count again on an invoice still waiting for payment (New, or Processing, which BTC that could still be
+    /// replaced may have caused), and on one that expired: XMR the exchange only reports after expiry (sent just before
+    /// it, or late) then shows the invoice as paid late straight away, as BTCPay does for any payment seen after expiry,
+    /// for the merchant to accept, instead of only once the BTC arrives. Never on a settled or invalid invoice. Safe to
+    /// call any number of times.
     /// </summary>
     public async Task<bool> Sync(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated,
         decimal? payoutBtc, bool first)
@@ -88,7 +91,8 @@ public class PendingPayments(
             if (Covers(Settled(payments, handler), orderCreated, need))
                 return existing is not { Accounted: true } ||
                        await Retire(invoiceId, pmi, orderNumber, $"the BTC of Pegasus Swap order {orderNumber} arrived and settled");
-            var waiting = invoice.Status is InvoiceStatus.New or InvoiceStatus.Processing;
+            var expired = invoice.Status == InvoiceStatus.Expired;
+            var waiting = invoice.Status is InvoiceStatus.New or InvoiceStatus.Processing || expired;
             if (existing is { Accounted: true })
             {
                 // Recorded by an earlier try that failed afterwards: make sure the invoice is looked at again.
@@ -121,7 +125,9 @@ public class PendingPayments(
             // The event first: the invoice turns Processing even if the log write below fails.
             eventAggregator.Publish(new InvoiceEvent(await invoiceRepository.GetInvoice(invoiceId) ?? invoice, InvoiceEvent.ReceivedPayment) { Payment = payment });
             await Log(invoiceId, $"Pegasus Swap order {orderNumber} received the customer's XMR. Recorded as a pending payment of {btc} BTC " +
-                                 "until the BTC arrives and settles; it never settles on its own.");
+                                 "until the BTC arrives and settles; it never settles on its own." +
+                                 (expired ? " The exchange reported the XMR after the invoice expired, so the invoice shows as paid late: if the customer paid in time, mark it settled once the BTC arrives." : ""),
+                expired ? InvoiceEventData.EventSeverity.Warning : InvoiceEventData.EventSeverity.Info);
             return true;
         }
         catch (Exception ex)
@@ -189,12 +195,12 @@ public class PendingPayments(
     }
 
     /// <summary>Best effort: a log that cannot be written never undoes or repeats the change it describes.</summary>
-    async Task Log(string invoiceId, string message)
+    async Task Log(string invoiceId, string message, InvoiceEventData.EventSeverity severity = InvoiceEventData.EventSeverity.Info)
     {
         try
         {
             var logs = new InvoiceLogs();
-            logs.Write(message, InvoiceEventData.EventSeverity.Info);
+            logs.Write(message, severity);
             await invoiceRepository.AddInvoiceLogs(invoiceId, logs);
         }
         catch (Exception ex)
