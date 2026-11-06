@@ -30,6 +30,8 @@ public class PegasusTests
         public bool SwapEstimateFields { get; set; }
         /// <summary>Created orders leave out where they pay.</summary>
         public bool OmitReceiveAddress { get; set; }
+        /// <summary>Created orders leave out how much BTC they pay.</summary>
+        public bool OmitReceiveAmount { get; set; }
         public const decimal BtcPerXmr = 0.004m;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -66,6 +68,8 @@ public class PegasusTests
                 json = Order(Created.Count, deposit, FixedPayout ?? deposit * BtcPerXmr * (Created.Count <= ShortOrders ? PayoutShare : 1m), body["receiveAddress"]!.ToString());
                 if (OmitReceiveAddress)
                     ((JObject)json["pairs"]!["receive"]!).Remove("address");
+                if (OmitReceiveAmount)
+                    ((JObject)json["pairs"]!["receive"]!["coin"]!).Remove("value");
             }
             else if (path == "/api/private/get-transaction")
             {
@@ -122,6 +126,7 @@ public class PegasusTests
         /// <summary>Whether the order's BTC is on the invoice.</summary>
         public bool Paid { get; set; }
         public List<string> RetiredPaid { get; } = new();
+        public Task RetireCovered(string invoiceId, PaymentMethodId pmi, string reason) => Task.CompletedTask;
         public Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated)
         {
             if (Paid)
@@ -143,7 +148,8 @@ public class PegasusTests
         fake ??= new FakePegasus();
         var service = new PegasusSwapService(new PegasusClient(new HttpClient(fake)), null!, NullLogger<PegasusSwapService>.Instance, null, pending)
         {
-            BaseUrl = new Uri("https://pegasus.example.com")
+            BaseUrl = new Uri("https://pegasus.example.com"),
+            Restored = true
         };
         return (service, fake);
     }
@@ -320,6 +326,28 @@ public class PegasusTests
         var status = await Ready(service, Config(), 0.01m);
         Assert.Equal(PegasusState.Failed, status.State);
         Assert.Null(status.Payment);
+    }
+
+    [Fact]
+    public async Task AnOrderThatDoesNotStateItsBtcAmountIsNotShown()
+    {
+        var (service, _) = Create(new FakePegasus { OmitReceiveAmount = true });
+        var status = await Ready(service, Config(), 0.01m);
+        Assert.Equal(PegasusState.Failed, status.State);
+        Assert.Null(status.Payment);
+    }
+
+    [Fact]
+    public async Task NoOrderIsMadeBeforeSavedOrdersAreRestored()
+    {
+        var (service, fake) = Create();
+        service.Restored = false;
+        Assert.Equal(PegasusState.Preparing, service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.01m).State);
+        await service.Pending("inv1");
+        Assert.Empty(fake.Created);
+
+        service.Restored = true;
+        Assert.Equal(PegasusState.Ready, (await Ready(service, Config(), 0.01m)).State);
     }
 
     [Fact]

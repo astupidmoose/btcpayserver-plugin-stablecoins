@@ -135,7 +135,7 @@ public class SwapToBtcListener(
         await LabelTransaction(invoice, outPoint.Hash);
         // The BTC a Monero swap promised has arrived: it replaces the pending payment.
         if (handler.Chain.Provider == SwapProvider.Pegasus)
-            await pendingPayments.Retire(invoice.Id, pmi, null, $"the BTC arrived in {id}");
+            await pendingPayments.RetireCovered(invoice.Id, pmi, $"the BTC arrived in {id}");
         invoice = await invoiceRepository.GetInvoice(invoice.Id);
         EventAggregator.Publish(new InvoiceEvent(invoice, InvoiceEvent.ReceivedPayment) { Payment = payment });
     }

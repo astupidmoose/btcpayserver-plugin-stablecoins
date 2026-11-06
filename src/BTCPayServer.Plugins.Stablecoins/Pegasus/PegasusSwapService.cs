@@ -148,6 +148,13 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
     /// <summary>Per store: the smallest BTC amount refused as too small and the largest refused as too large, and when.</summary>
     readonly ConcurrentDictionary<string, (decimal? Below, decimal? Above, DateTimeOffset At)> _limits = new();
 
+    /// <summary>
+    /// The orders saved on invoices were picked up after a start (<see cref="PegasusTracker"/>). Until then no new order is
+    /// made, so a checkout loaded right after a restart never shows a second deposit address next to a saved one.
+    /// Tests that do not restore set it.
+    /// </summary>
+    public bool Restored { get; set; }
+
     /// <summary>Settable so tests do not wait.</summary>
     public Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.UtcNow;
 
@@ -246,7 +253,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                     entry.Running = Task.Run(() => Recheck(entry, shown));
                 return StatusOf(shown.Payment);
             }
-            if (entry.Running is { IsCompleted: false })
+            if (entry.Running is { IsCompleted: false } || !Restored)
                 return new(PegasusState.Preparing, null, null);
             if (entry.Error is not null && entry.Target == target && now - entry.ErrorAt < RetryFailedAfter)
                 return new(PegasusState.Failed, null, entry.Error);
@@ -357,6 +364,9 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             }
             if (string.IsNullOrEmpty(tx.OrderNumber) || string.IsNullOrEmpty(tx.DepositAddress))
                 throw new PegasusException(null, "The swap has no order number or deposit address");
+            // Its BTC amount must be stated and cover what is due: an order whose payout is unknown is never shown.
+            if (tx.ReceiveAmount is not > 0m)
+                throw new PegasusException(null, $"Pegasus Swap order {tx.OrderNumber} does not say how much BTC it pays");
             // The order must confirm it pays this invoice's address before its deposit address is shown.
             if (tx.ReceiveAddress != btcAddress)
                 throw new PegasusException(null, string.IsNullOrEmpty(tx.ReceiveAddress)
@@ -560,6 +570,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                 }
             }
         }
+        if (complete)
+            Restored = true;
         return complete;
     }
 

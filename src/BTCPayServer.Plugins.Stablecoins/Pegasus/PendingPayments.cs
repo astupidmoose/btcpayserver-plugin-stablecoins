@@ -25,6 +25,11 @@ public interface IPendingPayments
     /// counts (retired now or before, or there is none); false when the BTC has not arrived yet or the write failed.
     /// </summary>
     Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated);
+    /// <summary>
+    /// Retires each pending payment that the BTC received since it was recorded covers in full. Other BTC reaching the
+    /// address (a direct payment, a late payout of an older order) leaves a larger pending payment in place.
+    /// </summary>
+    Task RetireCovered(string invoiceId, PaymentMethodId pmi, string reason);
 }
 
 /// <summary>
@@ -124,6 +129,31 @@ public class PendingPayments(
         {
             logger.LogWarning(ex, "Could not retire the pending Monero payment of invoice {InvoiceId}; trying again later", invoiceId);
             return false;
+        }
+    }
+
+    public async Task RetireCovered(string invoiceId, PaymentMethodId pmi, string reason)
+    {
+        try
+        {
+            if (!handlers.TryGetValue(pmi, out var h) || h is not SwapToBtcPaymentMethodHandler handler)
+                return;
+            var invoice = await invoiceRepository.GetInvoice(invoiceId);
+            if (invoice is null)
+                return;
+            var payments = invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi && p.Accounted).ToList();
+            var real = payments.Where(p => !IsPending(p, handler)).ToList();
+            foreach (var pending in payments.Where(p => IsPending(p, handler)))
+            {
+                var received = real.Where(p => p.ReceivedTime >= pending.ReceivedTime).Sum(p => p.Value);
+                if (received >= pending.Value)
+                    await Retire(invoiceId, pmi, handler.ParsePaymentDetails(pending.Details).PendingOrder, reason);
+            }
+        }
+        catch (Exception ex)
+        {
+            // The swap follower retires it later (once the order has paid out), so nothing is lost.
+            logger.LogWarning(ex, "Could not retire the pending Monero payments of invoice {InvoiceId}", invoiceId);
         }
     }
 
