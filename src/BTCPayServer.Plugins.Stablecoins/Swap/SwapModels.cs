@@ -43,11 +43,6 @@ public class SwapToBtcPaymentMethodConfig
     public string? PegasusSecret { get; set; }
     /// <summary>The store's own XMR address, where Pegasus Swap returns a Monero payment it could not swap.</summary>
     public string? RefundMonero { get; set; }
-    /// <summary>
-    /// Settle a Monero order as soon as the exchange's BTC payout is seen, without waiting for a confirmation, whatever
-    /// the store's speed policy. Only the exchange pays that address, and it already holds the customer's XMR.
-    /// </summary>
-    public bool MoneroZeroConf { get; set; } = true;
 
     /// <summary>The store turned the whole feature off: no chain is offered, but the choices below are kept.</summary>
     public bool Disabled { get; set; }
@@ -93,8 +88,6 @@ public class SwapToBtcPromptDetails
     public List<Intents.PersistedQuote>? IntentsQuotes { get; set; }
     /// <summary>Every Pegasus Swap order made for this checkout (Monero), followed until settled (also after a restart).</summary>
     public List<Pegasus.PersistedPegasusSwap>? PegasusSwaps { get; set; }
-    /// <summary>The BTC that arrives settles at 0 confirmations (<see cref="SwapToBtcPaymentMethodConfig.MoneroZeroConf"/>).</summary>
-    public bool ZeroConf { get; set; }
     /// <summary>Source transactions customers reported that LI.FI has not settled yet (also checked after a restart).</summary>
     public List<ReportedSource>? ReportedSources { get; set; }
 }
@@ -120,8 +113,6 @@ public class SwapToBtcPaymentData
     public long ConfirmationCount { get; set; }
     public bool RBF { get; set; }
     public string? KeyPath { get; set; }
-    /// <summary>Settled at 0 confirmations: a Monero swap's payout, when the store chose so.</summary>
-    public bool ZeroConf { get; set; }
     /// <summary>
     /// Set on a placeholder for BTC a Monero swap will pay (no outpoint): the Pegasus Swap order number.
     /// See <see cref="Pegasus.PendingPayments"/>.

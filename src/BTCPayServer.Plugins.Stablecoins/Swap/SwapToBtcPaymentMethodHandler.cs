@@ -84,11 +84,9 @@ public class SwapToBtcPaymentMethodHandler(
         // A fixed-rate swap needs an amount: a top-up invoice has none.
         if (chain.Provider == SwapProvider.Pegasus && context.InvoiceEntity.Type == InvoiceType.TopUp)
             throw new PaymentMethodUnavailableException("Monero needs an invoice amount");
-        var zeroConf = false;
         if (chain.Provider == SwapProvider.Pegasus)
         {
             var config = context.PaymentMethodConfig is { } token ? ParsePaymentMethodConfig(token) : new SwapToBtcPaymentMethodConfig();
-            zeroConf = config.MoneroZeroConf;
             var pegasus = serviceProvider.GetRequiredService<Pegasus.PegasusSwapService>();
             using var timeout = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15));
             if (await pegasus.Unavailable(context.Store.Id, config, prompt.Calculate().Due, timeout.Token) is { } reason)
@@ -107,8 +105,7 @@ public class SwapToBtcPaymentMethodHandler(
             AccountDerivation = prepare.AccountDerivation.ToString(),
             KeyPath = reserved.KeyPath?.ToString(),
             KeyIndex = reserved.Index ?? (int)(reserved.KeyPath?.Indexes.Last() ?? 0),
-            FromChainId = chain.LifiChainId,
-            ZeroConf = zeroConf
+            FromChainId = chain.LifiChainId
         }, Serializer);
     }
 
