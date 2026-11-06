@@ -15,7 +15,12 @@ public enum SwapProvider
     /// one-time deposit address, from any wallet or exchange. Not a payment method of its own (so it is never
     /// listed separately): an option inside the token checkouts, paid into that payment method's BTC address.
     /// </summary>
-    Intents
+    Intents,
+    /// <summary>
+    /// Monero through Pegasus Swap: a fixed-rate swap per invoice, whose one-time XMR deposit address and amount the
+    /// checkout shows like a normal Monero invoice. Its own payment method.
+    /// </summary>
+    Pegasus
 }
 
 public enum AddressFamily { Evm, Solana, Tron }
@@ -37,7 +42,7 @@ public record SwapSourceChain
     public long LifiChainId { get; init; }
     /// <summary>The same chain's NEAR Intents code (base, sol...), for "Send USDC from an exchange" on this checkout (LI.FI only).</summary>
     public string? IntentsNetworkCode { get; init; }
-    /// <summary>The coin's ticker, shown with the amount to send (exchange options only).</summary>
+    /// <summary>The coin's ticker, shown with the amount to send (exchange options and Monero).</summary>
     public string? Ticker { get; init; }
     /// <summary>Decimals the coin can send (exchange options only).</summary>
     public int Decimals { get; init; } = 8;
@@ -51,7 +56,7 @@ public record SwapSourceChain
     /// LIFI_ETHEREUM. Underscores, not dashes: some store integrations turn every '-' into '_'
     /// in the payment method it sends back when creating the invoice, and BTCPay only maps that back for built-in coins.
     /// </summary>
-    public PaymentMethodId PaymentMethodId => new($"{Provider switch { SwapProvider.Lifi => "LIFI", _ => "NEAR" }}_{Code}");
+    public PaymentMethodId PaymentMethodId => new($"{Provider switch { SwapProvider.Lifi => "LIFI", SwapProvider.Pegasus => "PEGASUS", _ => "NEAR" }}_{Code}");
 
     public string Image => CoinImage ?? $"Resources/chains/{Code.ToLowerInvariant()}.svg";
 
@@ -88,9 +93,10 @@ public record SwapSourceChain
         // Stablecoins from any wallet or exchange: buttons on the token checkouts, on that checkout's own chain.
         Intents("USDC", Eth, Base, Arb, Pol, Sol, Bsc, Avax, Op) with { CoinImage = "Resources/chains/usdc.svg" },
         Intents("USDT", Eth, Tron, Bsc, Sol, Pol, Arb, Avax) with { CoinImage = "Resources/chains/usdt.svg" },
+        new() { Code = "MONERO", Name = "Monero", Provider = SwapProvider.Pegasus, Ticker = "XMR", Decimals = 12, CoinImage = "Resources/chains/monero.svg" },
     ];
 
-    /// <summary>The chains that are BTCPay payment methods (everything but the exchange options).</summary>
+    /// <summary>The chains that are BTCPay payment methods (everything but the exchange options): token chains and Monero.</summary>
     public static readonly SwapSourceChain[] PaymentMethods = All.Where(c => c.Provider != SwapProvider.Intents).ToArray();
     /// <summary>"USDC from an exchange", "USDT from an exchange": offered inside the token (LI.FI) checkouts.</summary>
     public static readonly SwapSourceChain[] ExchangeOptions = All.Where(c => c.Provider == SwapProvider.Intents).ToArray();
