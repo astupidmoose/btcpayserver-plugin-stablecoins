@@ -25,11 +25,6 @@ public interface IPendingPayments
     /// counts (retired now or before, or there is none); false when the BTC has not arrived yet or the write failed.
     /// </summary>
     Task<bool> RetireIfPaid(string invoiceId, PaymentMethodId pmi, string orderNumber, DateTimeOffset orderCreated);
-    /// <summary>
-    /// Lets the invoice's payment in <paramref name="txId"/> (the exchange's reported payout) settle unconfirmed, when the
-    /// store chose so. True when done or not needed; false when that payment is not on the invoice yet or the write failed.
-    /// </summary>
-    Task<bool> TrustPayout(string invoiceId, PaymentMethodId pmi, string txId);
 }
 
 /// <summary>
@@ -151,43 +146,6 @@ public class PendingPayments(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not check the pending Monero payment of invoice {InvoiceId}; trying again later", invoiceId);
-            return false;
-        }
-    }
-
-    public async Task<bool> TrustPayout(string invoiceId, PaymentMethodId pmi, string txId)
-    {
-        try
-        {
-            if (!handlers.TryGetValue(pmi, out var h) || h is not SwapToBtcPaymentMethodHandler handler)
-                return true;
-            var invoice = await invoiceRepository.GetInvoice(invoiceId);
-            if (invoice?.GetPaymentPrompt(pmi) is not { Details: { } details })
-                return true;
-            if (!handler.ParsePaymentPromptDetails(details).ZeroConf)
-                return true;
-            var changed = new List<PaymentEntity>();
-            foreach (var payment in invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi))
-            {
-                var data = handler.ParsePaymentDetails(payment.Details);
-                if (data.ZeroConf || !SwapToBtcListener.IsTx(data.Outpoint, txId))
-                    continue;
-                data.ZeroConf = true;
-                if (payment.Status == PaymentStatus.Processing)
-                    payment.Status = SwapToBtcListener.GetStatus(invoice.SpeedPolicy, data);
-                payment.Details = Newtonsoft.Json.Linq.JToken.FromObject(data, handler.Serializer);
-                changed.Add(payment);
-            }
-            if (changed.Count == 0)
-                return invoice.GetPayments(false).Any(p => p.PaymentMethodId == pmi && SwapToBtcListener.IsTx(handler.ParsePaymentDetails(p.Details).Outpoint, txId));
-            await paymentService.UpdatePayments(changed);
-            eventAggregator.Publish(new InvoiceNeedUpdateEvent(invoiceId));
-            await Log(invoiceId, $"Pegasus Swap reported {txId} as its BTC payout: counted as paid without waiting for a confirmation.");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Could not settle the Pegasus Swap payout of invoice {InvoiceId}; trying again later", invoiceId);
             return false;
         }
     }

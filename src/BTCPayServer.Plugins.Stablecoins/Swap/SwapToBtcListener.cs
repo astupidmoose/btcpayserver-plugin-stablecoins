@@ -114,7 +114,7 @@ public class SwapToBtcListener(
             Outpoint = id,
             RBF = rbf,
             KeyPath = keyPath,
-            ZeroConf = TrustedPayout(handler.ParsePaymentPromptDetails(invoice.GetPaymentPrompt(pmi)!.Details), outPoint.Hash.ToString()),
+            ZeroConf = handler.ParsePaymentPromptDetails(invoice.GetPaymentPrompt(pmi)!.Details).ZeroConf,
             ConfirmationCount = Math.Max(0, tx?.Confirmations ?? 0)
         };
         var paymentData = new PaymentData
@@ -308,23 +308,6 @@ public class SwapToBtcListener(
         if (!accounted)
             return (confirmations, PaymentStatus.Unaccounted);
         return (confirmations, GetStatus(speedPolicy, new SwapToBtcPaymentData { ConfirmationCount = confirmations, RBF = rbf, ZeroConf = zeroConf }));
-    }
-
-    /// <summary>
-    /// Settled unconfirmed only when the store chose so and the exchange itself reported this transaction as a Monero
-    /// order's payout: anyone can send BTC to the address, and a sender's own transaction could be replaced.
-    /// The payout may also arrive before the exchange names it; <see cref="Pegasus.PendingPayments.TrustPayout"/> then marks it.
-    /// </summary>
-    public static bool TrustedPayout(SwapToBtcPromptDetails details, string txId) =>
-        details.ZeroConf && details.PegasusSwaps?.Any(s => s.PayoutTxId is { } p && IsTx(p, txId)) == true;
-
-    /// <summary>Whether an outpoint (txid-index) or txid is in the transaction <paramref name="txId"/>.</summary>
-    public static bool IsTx(string? outpointOrTxId, string txId)
-    {
-        if (string.IsNullOrWhiteSpace(outpointOrTxId) || string.IsNullOrWhiteSpace(txId))
-            return false;
-        var hash = outpointOrTxId.Trim().Split('-', ':')[0];
-        return hash.Equals(txId.Trim().Split('-', ':')[0], StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Same confirmation rules as BTCPay's own on-chain payments.</summary>
