@@ -37,6 +37,8 @@ public class PegasusTests
         /// <summary>Order lookups leave out the status, or send this one that cannot be read.</summary>
         public bool OmitStatus { get; set; }
         public JToken? StatusOverride { get; set; }
+        /// <summary>The largest XMR deposit estimates allow.</summary>
+        public decimal MaxXmr { get; set; } = 500m;
         public const decimal BtcPerXmr = 0.004m;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -62,7 +64,7 @@ public class PegasusTests
                     ["receive"] = SwapEstimateFields ? (OmitEstimateXmr ? null : xmr) : btc,
                     ["exchangeRate"] = BtcPerXmr,
                     ["minAmount"] = 0.05m,
-                    ["maxAmount"] = 500m
+                    ["maxAmount"] = MaxXmr
                 };
             }
             else if (path == "/api/private/create-transaction")
@@ -585,7 +587,7 @@ public class PegasusTests
         Assert.Equal(PegasusState.Received, service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.01m).State);
 
         fake.Status = PegasusStatus.New;
-        var rest = await Ready(service, Config(), 0.0001m);
+        var rest = await Ready(service, Config(), 0.001m);
         Assert.Equal(PegasusState.Ready, rest.State);
         Assert.Equal("O2", rest.Payment!.OrderNumber);
     }
@@ -660,6 +662,22 @@ public class PegasusTests
         Assert.Equal("Below the exchange's minimum", await service.Unavailable("store1", Config(), 0.0001m, CancellationToken.None));
         Assert.Equal("Above the exchange's maximum", await service.Unavailable("store1", Config(), 3m, CancellationToken.None));
         Assert.Null(await service.Unavailable("store1", Config(), 0.01m, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task NeverCreatesAnOrderOutsideTheFreshEstimatesLimits()
+    {
+        // The checkout's own estimate (not the one from invoice creation) has a lower maximum: no order is asked.
+        var (service, fake) = Create(new FakePegasus { MaxXmr = 2m });
+        var status = await Ready(service, Config(), 0.01m);
+        Assert.Equal(PegasusState.Failed, status.State);
+        Assert.Empty(fake.Created);
+
+        // Asking again with more XMR stops before it crosses the maximum.
+        (service, fake) = Create(new FakePegasus { MaxXmr = 2.51m, PayoutShare = 0.99m });
+        status = await Ready(service, Config(), 0.01m);
+        Assert.Equal(PegasusState.Failed, status.State);
+        Assert.Single(fake.Created);
     }
 
     [Fact]

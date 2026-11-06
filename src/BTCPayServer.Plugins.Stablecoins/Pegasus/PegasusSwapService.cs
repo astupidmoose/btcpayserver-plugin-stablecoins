@@ -367,6 +367,18 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         return null;
     }
 
+    /// <summary>
+    /// The estimate's own limits (minimum and maximum XMR deposit), checked on the amount actually sent, so no order is
+    /// asked that the exchange would refuse. Thrown as the exchange's own refusal would be.
+    /// </summary>
+    static void CheckLimits(PegasusEstimate estimate, decimal deposit)
+    {
+        if (estimate.MinAmount is > 0m and var min && deposit < min)
+            throw new PegasusException(400, $"Minimum amount is {min.ToString(CultureInfo.InvariantCulture)} XMR; {deposit.ToString(CultureInfo.InvariantCulture)} XMR asked");
+        if (estimate.MaxAmount is > 0m and var max && deposit > max)
+            throw new PegasusException(400, $"Maximum amount is {max.ToString(CultureInfo.InvariantCulture)} XMR; {deposit.ToString(CultureInfo.InvariantCulture)} XMR asked");
+    }
+
     public static decimal RoundUp(decimal amount, int decimals)
     {
         var factor = 1m;
@@ -389,6 +401,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             var xmr = DepositFromEstimate(estimate, btc) ??
                       throw new PegasusException(null, $"Unexpected estimate for {btc} BTC: amount {estimate.Amount}, receive {estimate.Receive}");
             var deposit = RoundUp(xmr, AmountDecimals);
+            CheckLimits(estimate, deposit);
             var request = new PegasusCreateRequest
             {
                 DepositCoin = DepositCoin,
@@ -408,6 +421,7 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                     throw new PegasusException(null, $"Pegasus Swap order {tx.OrderNumber} would pay {paid} BTC, less than the {btc} due, after {attempt} tries");
                 await Log(entry.InvoiceId, $"Pegasus Swap order {tx.OrderNumber} would pay {paid} BTC, less than the {btc} due; asking again with more XMR.");
                 request.DepositAmount = RoundUp(request.DepositAmount * btc / paid * 1.001m, AmountDecimals);
+                CheckLimits(estimate, request.DepositAmount);
                 tx = await client.Create(BaseUrl, keys, request, CancellationToken.None);
             }
             if (string.IsNullOrEmpty(tx.OrderNumber) || string.IsNullOrEmpty(tx.DepositAddress))
