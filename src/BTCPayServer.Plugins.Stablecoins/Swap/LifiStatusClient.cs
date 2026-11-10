@@ -15,10 +15,14 @@ public class LifiStatusClient(HttpClient http)
     public const string HttpClientName = "stablecoins-lifi";
     public const string BaseUrl = "https://li.quest";
 
-    /// <summary>Null while LI.FI has not indexed the transaction yet.</summary>
-    public async Task<LifiTransferStatus?> Status(string txHash, CancellationToken cancellationToken)
+    /// <summary>
+    /// Null while LI.FI has not indexed the transaction yet. The source chain is passed when known:
+    /// LI.FI needs it to find transactions sent from Tron.
+    /// </summary>
+    public async Task<LifiTransferStatus?> Status(string txHash, long? fromChainId, CancellationToken cancellationToken)
     {
-        using var res = await http.GetAsync($"{BaseUrl}/v1/status?txHash={Uri.EscapeDataString(txHash)}", cancellationToken);
+        var url = $"{BaseUrl}/v1/status?txHash={Uri.EscapeDataString(txHash)}" + (fromChainId is { } id ? $"&fromChain={id}" : "");
+        using var res = await http.GetAsync(url, cancellationToken);
         if (res.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadRequest)
             return null;
         res.EnsureSuccessStatusCode();

@@ -1,0 +1,51 @@
+@using BTCPayServer.Plugins.Stablecoins.Pegasus
+@using BTCPayServer.Plugins.Stablecoins.Swap
+@model BTCPayServer.Models.InvoicingModels.CheckoutModel
+
+<template id="@MoneroCheckoutModelExtension.CheckoutBodyComponentName">
+    <div>
+        <div class="stablecoins-monero mb-3" v-if="d && d.state !== 'done' && d.state !== 'ready'">
+            <div v-if="d.state === 'preparing'" class="text-center">
+                <span class="spinner-border spinner-border-sm text-muted" role="status"></span>
+                <p class="text-muted mt-2 mb-0">Getting your Monero payment address…</p>
+            </div>
+            <div v-else-if="d.state === 'received'" class="text-center">
+                <p class="fw-semibold mb-1">Monero payment received</p>
+                <p class="text-muted small mb-0">It is usually confirmed within 30 minutes. You can close this page.</p>
+            </div>
+            <div v-else-if="d.state === 'refunded'" class="alert alert-danger small mb-0" role="alert">
+                This payment could not be completed. Please contact the store about a refund.
+            </div>
+            <div v-else-if="d.state === 'failed'" class="alert alert-warning small mb-0" role="alert">{{ d.error }}</div>
+        </div>
+        <template v-if="d && d.state === 'ready'">
+            <div v-if="d.memo" class="alert alert-warning small mb-3" role="note">Payment ID: <strong>{{ d.memo }}</strong></div>
+            <component :is="'@SwapToBtcCheckoutModelExtension.BitcoinCheckoutBodyComponentName'" :model="model"></component>
+        </template>
+    </div>
+</template>
+
+<script>
+    (function () {
+        Vue.component(@Safe.Json(MoneroCheckoutModelExtension.CheckoutBodyComponentName), {
+            props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
+            template: @Safe.Json("#" + MoneroCheckoutModelExtension.CheckoutBodyComponentName),
+            data () { return { timer: null }; },
+            computed: {
+                d () { return this.model.@MoneroCheckoutModelExtension.DataKey; }
+            },
+            // The address is prepared and the swap followed in the background; ask for the updated invoice while needed,
+            // every second while the address is on its way so it shows as soon as it is ready.
+            mounted () {
+                const tick = () => {
+                    const state = this.d && this.d.state;
+                    if (state && state !== 'done' && this.$root && this.$root.fetchData)
+                        this.$root.fetchData();
+                    this.timer = setTimeout(tick, this.d && this.d.state === 'preparing' ? 1000 : 5000);
+                };
+                this.timer = setTimeout(tick, 1000);
+            },
+            beforeDestroy () { clearTimeout(this.timer); }
+        });
+    })();
+</script>

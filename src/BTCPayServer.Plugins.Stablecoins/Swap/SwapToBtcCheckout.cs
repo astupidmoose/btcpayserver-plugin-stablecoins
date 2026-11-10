@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Globalization;
 using BTCPayServer.Client.Models;
@@ -16,14 +17,15 @@ namespace BTCPayServer.Plugins.Stablecoins.Swap;
 
 /// <summary>
 /// A plain BIP21 link for API clients (Greenfield's paymentLink). Any BTC sent to the address
-/// counts toward the invoice, swapped or not.
+/// counts toward the invoice, swapped or not. None for Monero, which must go through the checkout.
 /// </summary>
 public class SwapToBtcPaymentLinkExtension(SwapToBtcPaymentMethodHandler handler) : IPaymentLinkExtension
 {
     public PaymentMethodId PaymentMethodId => handler.PaymentMethodId;
 
+    // Monero has no direct link: the XMR address and amount exist only once the checkout has made the swap.
     public string? GetPaymentLink(PaymentPrompt prompt, IUrlHelper? urlHelper) =>
-        prompt.Destination is null
+        prompt.Destination is null || handler.Chain.Provider == SwapProvider.Pegasus
             ? null
             : handler.Network.GenerateBIP21(prompt.Destination, prompt.Calculate().Due).ToString();
 }
@@ -212,8 +214,23 @@ public class SwapToBtcCheckoutModelExtension(
             ["walletConnectProjectId"] = config.WalletConnectProjectId,
             ["displayCurrency"] = display.Currency,
             ["btcPrice"] = display.BtcPrice?.ToString(CultureInfo.InvariantCulture),
-            ["sourceUrl"] = context.UrlHelper.Content($"~/plugins/stablecoins/swaps/{invoice.Id}/{handler.PaymentMethodId}/source")
+            ["sourceUrl"] = context.UrlHelper.Content($"~/plugins/stablecoins/swaps/{invoice.Id}/{handler.PaymentMethodId}/source"),
+            // "Pay from another network": the store's other token chains, paid into this same BTC address.
+            ["networks"] = new JArray(EnabledChains(context).Select(c => new JObject
+            {
+                ["chainId"] = c.LifiChainId,
+                ["name"] = c.Name,
+                ["image"] = context.UrlHelper.Content("~/" + c.Image)
+            }))
         };
+    }
+
+    /// <summary>The token chains this store accepts, in the usual order; always including this checkout's own.</summary>
+    IEnumerable<SwapSourceChain> EnabledChains(CheckoutModelContext context)
+    {
+        var excluded = context.StoreBlob.GetExcludedPaymentMethods();
+        return SwapSourceChain.PaymentMethods.Where(c => c == handler.Chain ||
+            (c.Provider == SwapProvider.Lifi && context.Store.GetPaymentMethodConfig(c.PaymentMethodId) is not null && !excluded.Match(c.PaymentMethodId)));
     }
 
     /// <summary>

@@ -18,7 +18,7 @@
                 Payment = p,
                 Chain = handler.Chain,
                 Data = data,
-                Link = TransactionLinkProviders.GetTransactionLink(p.PaymentMethodId, data.Outpoint)
+                Link = data.PendingOrder is null ? TransactionLinkProviders.GetTransactionLink(p.PaymentMethodId, data.Outpoint) : null
             };
         }).ToList();
 }
@@ -39,11 +39,19 @@
             @foreach (var p in payments)
             {
                 @* Struck out like BTCPay's own on-chain payments when the transaction was replaced: it no longer counts. *@
-                <tr style="@(p.Payment.Accounted ? "" : "text-decoration: line-through")" title="@(p.Payment.Accounted ? null : "Replaced: not counted")">
+                <tr style="@(p.Payment.Accounted ? "" : "text-decoration: line-through")"
+                    title="@(p.Payment.Accounted ? null : p.Data.PendingOrder is null ? "Replaced: not counted" : "No longer counted: the BTC arrived, or the swap did not complete")">
                     <td>
                         @p.Chain.Name
                     </td>
-                    <td><vc:truncate-center text="@p.Data.Outpoint" link="@p.Link" classes="truncate-center-id" /></td>
+                    @if (p.Data.PendingOrder is { } order)
+                    {
+                        <td>Pending, Pegasus Swap order @order</td>
+                    }
+                    else
+                    {
+                        <td><vc:truncate-center text="@p.Data.Outpoint" link="@p.Link" classes="truncate-center-id" /></td>
+                    }
                     <td>@p.Data.ConfirmationCount</td>
                     <td class="payment-value text-end text-nowrap">
                         <span data-sensitive class="text-success">@DisplayFormatter.Currency(p.Payment.Value, p.Payment.Currency)</span>
