@@ -124,14 +124,7 @@ public class PegasusClient(HttpClient http)
             req.Content = new StringContent(body.ToString(Formatting.None), Encoding.UTF8, "application/json");
         using var res = await http.SendAsync(req, cancellationToken);
         var text = await res.Content.ReadAsStringAsync(cancellationToken);
-        JToken? json = null;
-        try
-        {
-            json = JToken.Parse(text);
-        }
-        catch (JsonException)
-        {
-        }
+        var json = Swap.ExactJson.TryParse(text);
         if (!res.IsSuccessStatusCode || json is null)
             throw new PegasusException((int)res.StatusCode, $"Pegasus Swap returned HTTP {(int)res.StatusCode}" +
                 (Message(json) is { Length: > 0 } message ? $": {message}" : ""));

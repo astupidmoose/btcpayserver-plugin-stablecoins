@@ -14,7 +14,6 @@ using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Plugins.Stablecoins.Controllers;
 
@@ -28,10 +27,8 @@ public class UISwapCheckoutController(
     InvoiceRepository invoiceRepository,
     StoreRepository storeRepository,
     PaymentMethodHandlerDictionary handlers,
-    Intents.IntentsDepositService intents,
     SourceVerifier verifier,
-    CheckoutNotes notes,
-    ILogger<UISwapCheckoutController> logger) : Controller
+    CheckoutNotes notes) : Controller
 {
 
     public class SourceTransaction
