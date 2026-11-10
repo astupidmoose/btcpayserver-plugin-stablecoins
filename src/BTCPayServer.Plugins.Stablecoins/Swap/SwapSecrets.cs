@@ -13,7 +13,7 @@ namespace BTCPayServer.Plugins.Stablecoins.Swap;
 /// </summary>
 public class SwapSecrets(StoreRepository storeRepository)
 {
-    public record Keys(string? LifiApiKey, string? IntentsApiKey);
+    public record Keys(string? LifiApiKey, string? IntentsApiKey, string? PegasusPublicKey = null, string? PegasusSecret = null);
 
     readonly ConcurrentDictionary<string, (Keys Keys, DateTimeOffset At)> _cache = new();
     static readonly TimeSpan CacheFor = TimeSpan.FromMinutes(5);
@@ -23,7 +23,7 @@ public class SwapSecrets(StoreRepository storeRepository)
         if (_cache.TryGetValue(storeId, out var c) && DateTimeOffset.UtcNow - c.At < CacheFor)
             return c.Keys;
         var settings = await storeRepository.GetSettingAsync<SwapToBtcPaymentMethodConfig>(storeId, UISwapStoreController.StoreSettingName);
-        var keys = new Keys(Clean(settings?.ApiKey), Clean(settings?.IntentsApiKey));
+        var keys = new Keys(Clean(settings?.ApiKey), Clean(settings?.IntentsApiKey), Clean(settings?.PegasusPublicKey), Clean(settings?.PegasusSecret));
         _cache[storeId] = (keys, DateTimeOffset.UtcNow);
         return keys;
     }
@@ -33,7 +33,7 @@ public class SwapSecrets(StoreRepository storeRepository)
         _cache.TryGetValue(storeId, out var c) && DateTimeOffset.UtcNow - c.At < CacheFor ? c.Keys : GetAsync(storeId).GetAwaiter().GetResult();
 
     public void Set(string storeId, SwapToBtcPaymentMethodConfig settings) =>
-        _cache[storeId] = (new Keys(Clean(settings.ApiKey), Clean(settings.IntentsApiKey)), DateTimeOffset.UtcNow);
+        _cache[storeId] = (new Keys(Clean(settings.ApiKey), Clean(settings.IntentsApiKey), Clean(settings.PegasusPublicKey), Clean(settings.PegasusSecret)), DateTimeOffset.UtcNow);
 
     static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

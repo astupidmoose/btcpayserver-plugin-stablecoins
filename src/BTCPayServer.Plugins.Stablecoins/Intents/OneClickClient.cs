@@ -51,14 +51,7 @@ public class OneClickClient(HttpClient http)
             req.Content = new StringContent(body.ToString(Formatting.None), Encoding.UTF8, "application/json");
         using var res = await http.SendAsync(req, cancellationToken);
         var text = await res.Content.ReadAsStringAsync(cancellationToken);
-        JToken? json = null;
-        try
-        {
-            json = JToken.Parse(text);
-        }
-        catch (JsonException)
-        {
-        }
+        var json = Swap.ExactJson.TryParse(text);
         if (!res.IsSuccessStatusCode || json is null)
             throw new OneClickException((int)res.StatusCode, $"NEAR Intents returned HTTP {(int)res.StatusCode}" +
                 (json?["message"]?.ToString() is { Length: > 0 } message ? $": {message}" : ""));

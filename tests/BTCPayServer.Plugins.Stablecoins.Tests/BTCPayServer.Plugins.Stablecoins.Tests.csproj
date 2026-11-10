@@ -6,7 +6,16 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <OutputType>Exe</OutputType>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <!-- Same xUnit analyzer exceptions as BTCPay's own tests. -->
+    <NoWarn>$(NoWarn),xUnit1031,xUnit1051,xUnit1069</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same xUnit as the pinned BTCPay tests. Referenced directly: BTCPay's whole test project (and Playwright)
+         was only ever pulled in for it, and dominated the build. -->
+    <PackageReference Include="xunit.v3" Version="4.0.1" />
+  </ItemGroup>
 
   <ItemGroup>
     <Using Include="Xunit" />
@@ -14,7 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\BTCPayServer.Plugins.Stablecoins\BTCPayServer.Plugins.Stablecoins.csproj" />
-    <ProjectReference Include="..\..\submodules\btcpayserver\BTCPayServer.Tests\BTCPayServer.Tests.csproj" />
+    <ProjectReference Include="..\..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj" />
   </ItemGroup>
 
   <!-- This will make sure that referencing BTCPayServer doesn't put any artifact in the published directory -->

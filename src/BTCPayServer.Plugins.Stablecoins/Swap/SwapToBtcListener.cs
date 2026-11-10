@@ -41,6 +41,7 @@ public class SwapToBtcListener(
     BTCPayWalletProvider walletProvider,
     ExplorerClientProvider explorerClientProvider,
     WalletRepository walletRepository,
+    Pegasus.IPendingPayments pendingPayments,
     ILogger<SwapToBtcListener> logger) : EventHostedServiceBase(eventAggregator, logger)
 {
     BTCPayNetwork Network => networkProvider.BTC;
@@ -132,6 +133,9 @@ public class SwapToBtcListener(
         wallet.InvalidateCache(handler.Network.NBXplorerNetwork.DerivationStrategyFactory.Parse(
             handler.ParsePaymentPromptDetails(invoice.GetPaymentPrompt(pmi)!.Details).AccountDerivation!));
         await LabelTransaction(invoice, outPoint.Hash);
+        // The BTC a Monero swap promised has arrived: it replaces the pending payment.
+        if (handler.Chain.Provider == SwapProvider.Pegasus)
+            await pendingPayments.RetireCovered(invoice.Id, pmi, $"the BTC arrived in {id}");
         invoice = await invoiceRepository.GetInvoice(invoice.Id);
         EventAggregator.Publish(new InvoiceEvent(invoice, InvoiceEvent.ReceivedPayment) { Payment = payment });
     }
@@ -221,8 +225,9 @@ public class SwapToBtcListener(
     /// </summary>
     async Task RefreshConfirmations(BTCPayWallet wallet, InvoiceEntity invoice, SwapToBtcPaymentMethodHandler handler)
     {
+        // Pending Monero payments have no BTC transaction yet: PendingPayments handles them.
         var payments = invoice.GetPayments(false)
-            .Where(p => p.PaymentMethodId == handler.PaymentMethodId)
+            .Where(p => p.PaymentMethodId == handler.PaymentMethodId && !string.IsNullOrEmpty(handler.ParsePaymentDetails(p.Details).Outpoint))
             .ToList();
         if (payments.Count == 0)
             return;
@@ -253,6 +258,9 @@ public class SwapToBtcListener(
         if (changed.Count == 0)
             return;
         await paymentService.UpdatePayments(changed);
+        // BTC that just settled may cover a pending Monero payment (only settled BTC retires one).
+        if (changed.Any(p => p.Status == PaymentStatus.Settled))
+            await pendingPayments.RetireCovered(invoice.Id, handler.PaymentMethodId, "the BTC that replaces it settled");
         // Labeling is idempotent: redoing it as confirmations change repairs a label that failed when the payment arrived.
         foreach (var hash in changed.Select(p => OutPoint.Parse(handler.ParsePaymentDetails(p.Details).Outpoint).Hash).Distinct())
             await LabelTransaction(invoice, hash);
