@@ -145,8 +145,10 @@ public class SecurityTests
         lifi.Statuses["0xbase"] = new JObject { ["status"] = "FAILED", ["toAddress"] = InvoiceAddress };
         await verifier.CheckAll(CancellationToken.None);
         Assert.Equal(0, verifier.PendingCount);
-        Assert.Empty(terms);
+        // Searchable so support can find it, but never confirmed.
+        Assert.Equal(new[] { "0xbase" }, terms);
         Assert.Contains(logs, l => l.Contains("as FAILED"));
+        Assert.DoesNotContain(logs, l => l.StartsWith("LI.FI confirms"));
     }
 
     [Fact]
@@ -289,7 +291,87 @@ public class SecurityTests
         await verifier.CheckAll(CancellationToken.None);
         Assert.Contains(logs, l => l.Contains("0xbase") && l.Contains("otherbtctx") && l.Contains("did not receive"));
         Assert.DoesNotContain(logs, l => l.Contains("does not pay this invoice"));
+        // The refunded swap is searchable; the one whose BTC went elsewhere is not, nor is that BTC transaction.
+        Assert.Equal(new[] { "0xfailed" }, terms);
+    }
+
+    [Fact]
+    public async Task ARefundedSwapIsSearchableByItsTransactionAndWalletButNeverConfirmed()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        verifier.GetPaymentTxIds = _ => Task.FromResult(new HashSet<string>());
+        // As LI.FI reports a swap to a Bitcoin address that it refunded on the source chain.
+        lifi.Statuses["0xrefunded"] = new JObject
+        {
+            ["status"] = "DONE", ["substatus"] = "REFUNDED", ["fromAddress"] = "0xwallet", ["toAddress"] = LifiPlaceholder,
+            ["receiving"] = new JObject { ["txHash"] = "0xrefundtx" }
+        };
+        verifier.Enqueue("inv", "Ethereum", "0xrefunded", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+
+        Assert.Equal(0, verifier.PendingCount);
+        // The refund transaction is not a BTC payout and is not added.
+        Assert.Equal(new[] { "0xrefunded", "0xwallet" }, terms);
+        Assert.Contains(logs, l => l.Contains("0xrefunded") && l.Contains("DONE (REFUNDED)"));
+        Assert.DoesNotContain(logs, l => l.StartsWith("LI.FI confirms"));
+    }
+
+    [Fact]
+    public async Task AFailedSwapAimedAtAnotherBtcAddressIsNotSearchable()
+    {
+        var (verifier, lifi, logs, terms) = Verifier();
+        lifi.Statuses["0xelsewhere"] = new JObject { ["status"] = "FAILED", ["fromAddress"] = "0xwallet", ["toAddress"] = "bc1qsomeoneelse" };
+        verifier.Enqueue("inv", "Base", "0xelsewhere", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+
+        Assert.Equal(0, verifier.PendingCount);
         Assert.Empty(terms);
+        Assert.Contains(logs, l => l.Contains("0xelsewhere") && l.Contains("as FAILED"));
+    }
+
+    [Fact]
+    public async Task WritesAFailedSwapsSearchTermsAgainAfterAFailedWrite()
+    {
+        var (verifier, lifi, logs, _) = Verifier();
+        var terms = new List<string>();
+        var fail = true;
+        verifier.WriteSearchTerms = (_, t) =>
+        {
+            if (fail) { fail = false; throw new InvalidOperationException("database unavailable"); }
+            terms.AddRange(t);
+            return Task.CompletedTask;
+        };
+        lifi.Statuses["0xrefunded"] = new JObject { ["status"] = "DONE", ["substatus"] = "REFUNDED", ["toAddress"] = LifiPlaceholder };
+        verifier.Enqueue("inv", "Base", "0xrefunded", InvoiceAddress);
+        await verifier.CheckAll(CancellationToken.None);
+        // Kept, and nothing logged yet, so the next round neither loses the terms nor logs twice.
+        Assert.Equal(1, verifier.PendingCount);
+        Assert.Empty(logs);
+        await verifier.CheckAll(CancellationToken.None);
+        Assert.Equal(0, verifier.PendingCount);
+        Assert.Equal(new[] { "0xrefunded" }, terms);
+        Assert.Single(logs);
+    }
+
+    [Theory]
+    [InlineData(InvoiceAddress, true)]
+    [InlineData("BC1QXY2KGDYGJRSQTZQ2N0YRF2493P83KKFJHX0WLH", true)] // same address, other case
+    [InlineData(LifiPlaceholder, true)] // LI.FI's placeholder for a Bitcoin receiver
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("bc1qsomeoneelse", false)]
+    public void ASwapIsAimedAtTheInvoiceUnlessLifiNamesAnotherBtcAddress(string? toAddress, bool aimed) =>
+        Assert.Equal(aimed, SourceVerifier.AimedAt(new LifiTransferStatus { ToAddress = toAddress }, InvoiceAddress));
+
+    [Fact]
+    public void OnlyConfirmedAndFailedSwapsGetSearchTerms()
+    {
+        var p = new SourceVerifier.Pending("inv", "Base", "0xtx", InvoiceAddress, DateTimeOffset.UtcNow);
+        var status = new LifiTransferStatus { FromAddress = "0xwallet", ToAddress = LifiPlaceholder, Receiving = new LifiTransferLeg { TxHash = "0x" + InvoicePayoutTx } };
+        Assert.Equal(new[] { "0xtx", "0xwallet", InvoicePayoutTx }, SourceVerifier.SearchTerms(SourceVerifier.Verdict.Confirmed, status, p));
+        Assert.Equal(new[] { "0xtx", "0xwallet" }, SourceVerifier.SearchTerms(SourceVerifier.Verdict.Failed, status, p));
+        Assert.Null(SourceVerifier.SearchTerms(SourceVerifier.Verdict.Wait, status, p));
+        Assert.Null(SourceVerifier.SearchTerms(SourceVerifier.Verdict.PaysElsewhere, status, p));
     }
 
     [Fact]
