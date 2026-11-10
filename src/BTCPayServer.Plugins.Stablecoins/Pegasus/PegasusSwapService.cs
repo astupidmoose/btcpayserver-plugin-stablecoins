@@ -129,10 +129,20 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         public bool GaveUp;
         public bool PendingAdded;
         public bool PendingRetired;
+        /// <summary>
+        /// Made but not saved on the invoice yet: its deposit address is not shown, so a customer never pays an order a
+        /// restart could lose. Saving is retried (by the checkout and <see cref="FollowAll"/>) until it succeeds; no other
+        /// order is made meanwhile.
+        /// </summary>
+        public bool Unpersisted;
         /// <summary>The exchange has the XMR and the order still counts: it should hold the invoice in Processing.</summary>
         public bool NeedsAdd => !PendingAdded && Received(Payment.Status) && !Abandoned;
-        /// <summary>The order will not pay out: a pending payment recorded for it should stop counting.</summary>
-        public bool NeedsRetire => PendingAdded && !PendingRetired && Abandoned;
+        /// <summary>
+        /// The order will not pay out: a pending payment recorded for it should stop counting. Not gated on
+        /// <see cref="PendingAdded"/>: the payment is written before that flag is saved, so after a crash in between it can
+        /// exist with the flag false. Retiring is idempotent and does nothing when no pending payment was recorded.
+        /// </summary>
+        public bool NeedsRetire => !PendingRetired && Abandoned;
         /// <summary>
         /// The order still counts and has (or had) a pending payment: kept in line with the BTC on the invoice, which can
         /// settle (it stops counting) or be demoted again (it counts again), until the order's follow time ends.
@@ -191,6 +201,9 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
 
     /// <summary>Settable so tests do not wait.</summary>
     public Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.UtcNow;
+
+    /// <summary>Where the invoice's swaps are saved instead of its prompt details; set by tests. Throwing is a failed save.</summary>
+    public Func<string, PaymentMethodId, List<PersistedPegasusSwap>, Task>? WriteSwaps { get; set; }
 
     /// <summary>Settable by tests; otherwise Pegasus Swap's own endpoint, or the environment variable's.</summary>
     public Uri BaseUrl { get; set; } = Intents.IntentsDepositService.SafeUrl(Environment.GetEnvironmentVariable(UrlVariable), PegasusClient.DefaultUrl);
@@ -294,9 +307,10 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             // amount it was made for: after a short payout, the rest gets a new order.
             // An order given up on (not finished within the follow window) is never offered for paying again; one still
             // under way, or paid out without the BTC arriving, then shows as failed, since its pending payment no longer counts.
-            var shown = entry.Swaps.LastOrDefault(s => Active(s.Payment.Status))
-                        ?? entry.Swaps.LastOrDefault(s => s.Payment.MadeFor(due, target) && !(s.GaveUp && s.Payment.Status == PegasusStatus.New) &&
-                                                          s.Payment.Status is PegasusStatus.New or PegasusStatus.Success or PegasusStatus.Refund);
+            var saved = entry.Swaps.Where(s => !s.Unpersisted).ToList();
+            var shown = saved.LastOrDefault(s => Active(s.Payment.Status))
+                        ?? saved.LastOrDefault(s => s.Payment.MadeFor(due, target) && !(s.GaveUp && s.Payment.Status == PegasusStatus.New) &&
+                                                    s.Payment.Status is PegasusStatus.New or PegasusStatus.Success or PegasusStatus.Refund);
             if (shown is not null)
             {
                 if (shown.Polled && now - shown.Payment.CheckedAt > RecheckEvery && entry.Running is not { IsCompleted: false })
@@ -308,6 +322,13 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             }
             if (entry.Running is { IsCompleted: false } || !Restored || _unrestored.ContainsKey(invoiceId))
                 return new(PegasusState.Preparing, null, null);
+            // An order made but not saved yet: save that same order again rather than make another, and show nothing until
+            // it is saved.
+            if (entry.Swaps.Any(s => s.Unpersisted))
+            {
+                entry.Running = Task.Run(() => Save(entry));
+                return new(PegasusState.Preparing, null, null);
+            }
             if (entry.Error is not null && entry.Target == target && now - entry.ErrorAt < RetryFailedAfter)
                 return new(PegasusState.Failed, null, entry.Error);
             if (entry.Swaps.Count >= MaxSwapsPerInvoice)
@@ -453,7 +474,8 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             var amount = tx.DepositAmount is > 0m and var a ? RoundUp(a, AmountDecimals) : request.DepositAmount;
             var now = Now();
             var payment = new PegasusPayment(tx.OrderNumber, tx.DepositAddress, tx.DepositMemo, amount, target, tx.Status ?? PegasusStatus.New, now, now, tx.ReceiveAmount, due);
-            var created = new Swap { Payment = payment };
+            // Hidden until it is saved on the invoice (below): the checkout shows its address only then.
+            var created = new Swap { Payment = payment, Unpersisted = true };
             lock (entry)
                 entry.Swaps.Add(created);
             await Log(entry.InvoiceId,
@@ -735,21 +757,23 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
         _unrestored.TryRemove(invoiceId, out _);
     }
 
-    /// <summary>Writes the invoice's swaps into its prompt details.</summary>
-    async Task Save(Entry entry)
+    /// <summary>
+    /// Writes the invoice's swaps into its prompt details. True when they were written: the swaps written are then no longer
+    /// <see cref="Swap.Unpersisted"/>, so the checkout can show them.
+    /// </summary>
+    async Task<bool> Save(Entry entry)
     {
         var gate = PromptDetailsGate.For(entry.InvoiceId);
         await gate.WaitAsync();
         try
         {
+            Swap[] written;
+            List<PersistedPegasusSwap> swaps;
             lock (entry)
+            {
                 entry.Unsaved = false;
-            var invoice = await invoiceRepository.GetInvoice(entry.InvoiceId);
-            if (invoice?.GetPaymentPrompt(entry.PaymentMethodId) is not { Details: { } details })
-                return;
-            var parsed = details.ToObject<SwapToBtcPromptDetails>(DetailsSerializer) ?? new SwapToBtcPromptDetails();
-            lock (entry)
-                parsed.PegasusSwaps = entry.Swaps.Select(s => new PersistedPegasusSwap
+                written = entry.Swaps.ToArray();
+                swaps = written.Select(s => new PersistedPegasusSwap
                 {
                     OrderNumber = s.Payment.OrderNumber,
                     Address = s.Payment.Address,
@@ -767,13 +791,30 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                     PendingRetired = s.PendingRetired,
                     GaveUp = s.GaveUp
                 }).ToList();
-            await invoiceRepository.UpdatePaymentDetails(entry.InvoiceId, entry.PaymentMethodId, Newtonsoft.Json.Linq.JObject.FromObject(parsed, DetailsSerializer));
+            }
+            if (WriteSwaps is not null)
+                await WriteSwaps(entry.InvoiceId, entry.PaymentMethodId, swaps);
+            else
+            {
+                var invoice = await invoiceRepository.GetInvoice(entry.InvoiceId);
+                // Nowhere to save (the invoice is gone): its orders are never shown.
+                if (invoice?.GetPaymentPrompt(entry.PaymentMethodId) is not { Details: { } details })
+                    return false;
+                var parsed = details.ToObject<SwapToBtcPromptDetails>(DetailsSerializer) ?? new SwapToBtcPromptDetails();
+                parsed.PegasusSwaps = swaps;
+                await invoiceRepository.UpdatePaymentDetails(entry.InvoiceId, entry.PaymentMethodId, Newtonsoft.Json.Linq.JObject.FromObject(parsed, DetailsSerializer));
+            }
+            lock (entry)
+                foreach (var s in written)
+                    s.Unpersisted = false;
+            return true;
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not save the Pegasus Swap orders of invoice {InvoiceId}; trying again shortly", entry.InvoiceId);
             lock (entry)
                 entry.Unsaved = true;
+            return false;
         }
         finally
         {

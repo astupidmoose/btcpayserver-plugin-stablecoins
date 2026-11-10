@@ -206,7 +206,9 @@ public class PegasusTests
         var service = new PegasusSwapService(new PegasusClient(new HttpClient(fake)), null!, NullLogger<PegasusSwapService>.Instance, null, pending)
         {
             BaseUrl = new Uri("https://pegasus.example.com"),
-            Restored = true
+            Restored = true,
+            // Saving on the invoice succeeds unless a test says otherwise.
+            WriteSwaps = (_, _, _) => Task.CompletedTask
         };
         return (service, fake);
     }
@@ -515,6 +517,83 @@ public class PegasusTests
         Assert.Empty(pending.Added);
         await service.FollowAll(CancellationToken.None);
         Assert.Single(pending.Retired);
+    }
+
+    [Theory]
+    [InlineData(PegasusStatus.Refund, 0)]
+    [InlineData(PegasusStatus.Overdue, 0)]
+    [InlineData(PegasusStatus.Exchanging, 25)] // had the XMR, never paid out within the day
+    public async Task AnAbandonedOrderRetiresItsPendingPaymentEvenIfTheFlagWasNotSaved(int status, int hoursOld)
+    {
+        var pending = new FakePending();
+        var (service, _) = Create(pending: pending);
+        // The pending payment was written, then BTCPay stopped before the order's PendingAdded flag was saved.
+        service.Restore("inv9", "store1", Monero.PaymentMethodId, Config(),
+        [
+            new PersistedPegasusSwap { OrderNumber = "O1", Address = "8saved", Amount = "1.5", TargetSats = 1_000_000, Status = status,
+                Created = DateTimeOffset.UtcNow.AddHours(-hoursOld), PendingAdded = false }
+        ]);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.Retired));
+        Assert.Empty(pending.Added);
+        // Retired once, then left alone.
+        await service.FollowAll(CancellationToken.None);
+        Assert.Single(pending.Retired);
+    }
+
+    [Fact]
+    public async Task ANewOrderIsShownOnlyOnceItIsSaved()
+    {
+        var (service, fake) = Create();
+        var saves = 0;
+        var failures = 2;
+        List<PersistedPegasusSwap>? written = null;
+        service.WriteSwaps = (_, _, swaps) =>
+        {
+            saves++;
+            if (failures-- > 0)
+                throw new InvalidOperationException("database unavailable");
+            written = swaps;
+            return Task.CompletedTask;
+        };
+        // Made, but not saved: no address to pay yet.
+        var status = await Ready(service, Config(), 0.01m);
+        Assert.Equal(PegasusState.Preparing, status.State);
+        Assert.Null(status.Payment);
+
+        // The checkout keeps saving that same order until it is saved, then shows it.
+        for (var i = 0; i < 5 && status.State == PegasusState.Preparing; i++)
+            status = await Ready(service, Config(), 0.01m);
+        Assert.Equal(PegasusState.Ready, status.State);
+        Assert.Single(fake.Created);
+        Assert.Equal(3, saves);
+        // What is shown is exactly what was saved, so a restart finds it.
+        var saved = Assert.Single(written!);
+        Assert.Equal(status.Payment!.OrderNumber, saved.OrderNumber);
+        Assert.Equal(status.Payment.Address, saved.Address);
+    }
+
+    [Fact]
+    public async Task AnUnsavedOrderIsNeverShownOrReplacedAndIsSavedAgainInTheBackground()
+    {
+        var (service, fake) = Create();
+        var fail = true;
+        service.WriteSwaps = (_, _, _) => fail ? throw new InvalidOperationException("database unavailable") : Task.CompletedTask;
+        for (var i = 0; i < 4; i++)
+        {
+            var status = await Ready(service, Config(), 0.01m);
+            Assert.Equal(PegasusState.Preparing, status.State);
+            Assert.Null(status.Payment);
+        }
+        await service.Pending("inv1");
+        Assert.Single(fake.Created);
+
+        fail = false;
+        await service.FollowAll(CancellationToken.None);
+        var shown = service.Get(Config(), "store1", Monero.PaymentMethodId, "inv1", BtcAddress, 0.01m);
+        Assert.Equal(PegasusState.Ready, shown.State);
+        Assert.NotNull(shown.Payment);
+        Assert.Single(fake.Created);
     }
 
     [Fact]
