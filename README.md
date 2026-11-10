@@ -83,6 +83,8 @@ dotnet build src/BTCPayServer.Plugins.Stablecoins/BTCPayServer.Plugins.Stablecoi
 dotnet test --project tests/BTCPayServer.Plugins.Stablecoins.Tests/BTCPayServer.Plugins.Stablecoins.Tests.csproj
 ```
 
+Releases: push a tag `vX.Y.Z` matching `<Version>` on a commit on `main` (or run the Release workflow on `main`). GitHub Actions tests, packages and publishes the `.btcpay` with its `SHA256SUMS`, using that version's CHANGELOG.md section as notes. CI runs the tests on every pull request.
+
 The panel bundles are committed. To rebuild them: `cd client && npm ci && npm run build`. Dependencies are pinned to exact versions, and the build stops if `npm audit` reports a high-severity issue in a runtime dependency, apart from the ones `client/audit.mjs` accepts with its reason.
 
 For local testing against fake servers, set `BTCPAY_STABLECOINS_ONECLICK_URL` (1Click) and `BTCPAY_STABLECOINS_PEGASUS_URL` (Pegasus Swap).
