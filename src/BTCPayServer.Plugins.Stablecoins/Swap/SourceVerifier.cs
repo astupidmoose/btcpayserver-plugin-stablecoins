@@ -18,9 +18,10 @@ namespace BTCPayServer.Plugins.Stablecoins.Swap;
 
 /// <summary>
 /// Checks the source transactions customers report with LI.FI before the invoice trusts them.
-/// A reported hash is only written as this swap's transaction, and only made searchable, once LI.FI
-/// confirms it pays this invoice: its BTC payout is a transaction this invoice received, or it names
-/// this invoice's own BTC address. Anything else stays an unverified note.
+/// A reported hash is only written as this swap's transaction once LI.FI confirms it pays this invoice:
+/// its BTC payout is a transaction this invoice received, or it names this invoice's own BTC address.
+/// It is made searchable then, or when LI.FI reports the swap failed or refunded and it was not aimed at
+/// another BTC address, so support can find a customer's refunded payment. Anything else stays an unverified note.
 /// For Bitcoin destinations LI.FI's toAddress is often a placeholder (0x11f1...11f1), not the BTC address,
 /// so the payout transaction is what decides.
 /// </summary>
@@ -255,15 +256,10 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
             var expired = Now() - p.Since > (status.Status == "PENDING" ? GiveUpUnreachableAfter : GiveUpAfter);
             if (verdict == Verdict.Wait && !expired)
                 continue;
-            // A confirmed check stays pending, and saved, until its search terms are written.
-            if (verdict == Verdict.Confirmed)
-            {
-                var terms = new List<string> { p.TxHash };
-                if (!string.IsNullOrEmpty(status.FromAddress)) terms.Add(status.FromAddress);
-                if (Normalize(status.Receiving?.TxHash) is { } payout) terms.Add(payout);
-                if (!await AddSearchTerms(p.InvoiceId, terms.Distinct(StringComparer.OrdinalIgnoreCase).ToList()))
-                    continue;
-            }
+            // A confirmed check, or a failed swap aimed at this invoice, stays pending, and saved, until its search terms are written.
+            if (SearchTerms(verdict, status, p) is { } terms &&
+                !await AddSearchTerms(p.InvoiceId, terms))
+                continue;
             await Done(key, p);
             if (verdict == Verdict.PaysElsewhere)
             {
@@ -293,6 +289,33 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
                                    $". Track it at https://scan.li.fi/tx/{p.TxHash}", InvoiceEventData.EventSeverity.Info);
         }
     }
+
+    /// <summary>
+    /// What makes the invoice findable by what the customer sends support. A confirmed swap: its transaction, the
+    /// paying wallet and the BTC payout. A swap LI.FI reports failed or refunded: its transaction and wallet, so a
+    /// customer asking about a refund can be found, unless LI.FI shows it aimed at another BTC address. Search terms
+    /// only help find the invoice; they never count as payment. Null when nothing is to be written.
+    /// </summary>
+    public static List<string>? SearchTerms(Verdict verdict, LifiTransferStatus status, Pending p)
+    {
+        if (verdict == Verdict.Failed && !AimedAt(status, p.BtcAddress))
+            return null;
+        if (verdict is not (Verdict.Confirmed or Verdict.Failed))
+            return null;
+        var terms = new List<string> { p.TxHash };
+        if (!string.IsNullOrEmpty(status.FromAddress)) terms.Add(status.FromAddress);
+        if (verdict == Verdict.Confirmed && Normalize(status.Receiving?.TxHash) is { } payout) terms.Add(payout);
+        return terms.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>
+    /// Whether a swap could have been meant for this invoice: LI.FI names this invoice's BTC address, its placeholder
+    /// for a non-EVM receiver (0x...), or no receiver. A real address that is not this invoice's means another payment.
+    /// </summary>
+    public static bool AimedAt(LifiTransferStatus status, string btcAddress) =>
+        status.ToAddress is not { Length: > 0 } to ||
+        to.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(to, btcAddress, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Not an answer: keep checking, so an outage past the deadline does not discard a real swap.</summary>
     async Task Unanswered(string key, Pending p)
