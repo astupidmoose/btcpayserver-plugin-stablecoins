@@ -312,10 +312,23 @@ public class SourceVerifier(LifiStatusClient lifi, InvoiceRepository invoiceRepo
         if (verdict is not (Verdict.Confirmed or Verdict.Failed))
             return null;
         var terms = new List<string> { p.TxHash };
-        if (!string.IsNullOrEmpty(status.FromAddress)) terms.Add(status.FromAddress);
+        if (!string.IsNullOrEmpty(status.FromAddress))
+        {
+            terms.Add(status.FromAddress);
+            // Invoice search is case-sensitive: LI.FI gives an EVM wallet in lower case, while wallets and explorers
+            // show it checksummed (mixed case). Both spellings are added.
+            if (Checksummed(status.FromAddress) is { } mixed)
+                terms.Add(mixed);
+        }
         if (verdict == Verdict.Confirmed && Normalize(status.Receiving?.TxHash) is { } payout) terms.Add(payout);
-        return terms.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return terms.Distinct(StringComparer.Ordinal).ToList();
     }
+
+    /// <summary>The EIP-55 spelling of an EVM address (0x and 40 hex characters), or null for anything else.</summary>
+    public static string? Checksummed(string address) =>
+        address.Length == 42 && address.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && address.Skip(2).All(Uri.IsHexDigit)
+            ? "0x" + AddressChecks.Eip55(address[2..])
+            : null;
 
     /// <summary>
     /// Whether a swap could have been meant for this invoice: LI.FI names this invoice's BTC address, its placeholder
