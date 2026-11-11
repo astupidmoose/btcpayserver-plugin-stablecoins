@@ -53,7 +53,7 @@ For support, the invoice log records:
 - **Exchange payments:** each NEAR Intents quote (deposit address, amount, deadline, refund address, quote id), its status changes, why a quote failed, the customer's deposit transaction and NEAR Intents' BTC payout transaction. Quotes are saved with the invoice and followed by the server until they settle, even after the customer closes the checkout or BTCPay restarts. The deposit address, quote id and transaction hashes are added to the search terms.
 - **Monero payments:** each Pegasus Swap order (order number, deposit address, XMR amount, BTC amount, refund address), every status change, why an order failed, the customer's XMR deposit transaction and Pegasus Swap's BTC payout transaction. Orders are saved with the invoice and followed for up to a day, also after a restart. The order number, deposit address and transaction ids are added to the search terms.
 
-Pasting whatever the customer sends you (their wallet, a transaction hash, the address they paid) into the Invoices search finds the invoice once the provider has confirmed it, or has reported that swap failed or refunded. Unverified reports are in the invoice log only.
+Pasting whatever the customer sends you (their wallet, a transaction hash, the address they paid) into the Invoices search finds the invoice once the provider has confirmed it, or has reported that swap failed or refunded. An EVM wallet is found in lower case or checksummed. After an update, swaps checked by an earlier version are made searchable the same way, once, in the background. Unverified reports are in the invoice log only.
 
 ## Settings (per store)
 

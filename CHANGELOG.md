@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.2
+
+- **Earlier swaps become searchable:** once after the update, swaps checked before 0.12.1 that LI.FI reported failed or refunded become searchable by their transaction hash and the customer's wallet. Each is asked about again and follows the same rules as a new swap. Before, only swaps checked after the update were covered.
+- **Wallets in either spelling:** invoice search is case-sensitive. A customer's EVM wallet is now searchable both in lower case and checksummed (mixed case, as wallets and the invoice log show it), for new swaps and, through the same one-time pass, earlier ones.
+
 ## 0.12.1
 
 First release from `main` with every feature merged. Builds 0.12.0 and earlier were made from feature branches.

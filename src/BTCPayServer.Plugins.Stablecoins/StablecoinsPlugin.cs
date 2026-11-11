@@ -44,6 +44,8 @@ public class StablecoinsPlugin : BaseBTCPayServerPlugin
             provider.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(LifiStatusClient.HttpClientName)));
         services.AddSingleton<SourceVerifier>();
         services.AddHostedService(p => p.GetRequiredService<SourceVerifier>());
+        // Once after an update: earlier failed or refunded swaps, and wallets in their checksummed spelling, become searchable.
+        services.AddHostedService<FailedSwapBackfill>();
         services.AddSingleton<Controllers.CheckoutNotes>();
         services.AddHttpClient(Pegasus.PegasusClient.HttpClientName);
         services.AddSingleton(provider => new Pegasus.PegasusClient(
