@@ -292,6 +292,13 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         return (origin, btc, apiKey);
     }
 
+    /// <summary>
+    /// Whether two wallet addresses are the same wallet: EVM addresses are hex, the same in any case; Solana and Tron
+    /// addresses are case-sensitive, and another case is another wallet.
+    /// </summary>
+    public static bool SameWallet(AddressFamily family, string? a, string? b) =>
+        string.Equals(a, b, family == AddressFamily.Evm ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
     static bool IsAddressOf(AddressFamily family, string address) => family switch
     {
         AddressFamily.Evm => AddressChecks.IsEvmAddress(address),
@@ -377,7 +384,7 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
                 entry.Touched = now;
                 entry.Config = config;
                 var recent = entry.Quotes.LastOrDefault(q => q.Payment.TargetSats == target && q.Payment.Status == "PENDING_DEPOSIT" &&
-                                                             string.Equals(q.RefundTo, fromAddress, StringComparison.OrdinalIgnoreCase) &&
+                                                             SameWallet(paidFrom.Family, q.RefundTo, fromAddress) &&
                                                              now - q.Created < ReuseWalletDepositFor && !Expired(q, now));
                 if (recent is not null)
                     return new WalletDeposit(recent.Payment.Address, recent.Payment.AmountUnits, recent.Payment.Decimals, recent.Payment.Deadline);

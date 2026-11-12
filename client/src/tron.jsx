@@ -13,7 +13,8 @@ const FEE_LIMIT = 100_000_000;
 async function transfer({ token, to, amount, from }) {
   if (!wallet.getWallet) throw new Error('Connect your wallet first.');
   const adapter = await wallet.getWallet();
-  if (adapter.address && adapter.address !== from) throw new Error('Your wallet changed. Reconnect it and try again.');
+  // Only from the account the deposit was made for (and refunds to): Tron addresses are case-sensitive.
+  if (adapter.address !== from) throw new Error('Your wallet changed accounts. Reconnect it and try again.');
   const tronWeb = new TronWeb({ fullHost: TRONGRID });
   let unsigned;
   if (isNativeToken(token)) {

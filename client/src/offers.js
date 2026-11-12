@@ -30,3 +30,12 @@ export function cheapest(offers) {
 export function withinShown(depositAmount, shownAmount, tolerance = 1005n) {
   return depositAmount * 1000n <= shownAmount * tolerance;
 }
+
+/**
+ * True when an EVM wallet client signs as `from`: the account a NEAR Intents deposit was made for, and refunds to.
+ * A wallet that changed accounts meanwhile must not pay it.
+ */
+export function signsAs(client, from) {
+  const signer = client?.account?.address;
+  return typeof signer === 'string' && typeof from === 'string' && signer.toLowerCase() === from.toLowerCase();
+}

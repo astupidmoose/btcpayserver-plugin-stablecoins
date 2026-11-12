@@ -41,3 +41,12 @@ test('a deposit is sent as shown only within 0.5% above the amount shown', () =>
   assert.ok(!withinShown(1006n, 1000n));
   assert.ok(withinShown(999n, 1000n));
 });
+
+test('an EVM payment is sent only by the account the deposit was made for', async () => {
+  const { signsAs } = await import('../src/offers.js');
+  const from = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+  assert.ok(signsAs({ account: { address: from.toLowerCase() } }, from));
+  assert.ok(!signsAs({ account: { address: '0x52908400098527886E0F7030069857D2E4169EE7' } }, from));
+  assert.ok(!signsAs({ account: undefined }, from));
+  assert.ok(!signsAs(null, from));
+});

@@ -218,6 +218,39 @@ public class IntentsWalletTests
     }
 
     [Fact]
+    public async Task ADepositMadeForAnotherWalletIsNeverReused()
+    {
+        var (service, fake, saved) = Create();
+        // Someone who knows the invoice pre-makes a deposit refunding to a case-altered copy of the customer's Solana
+        // wallet: another wallet. The customer's own Pay must get a deposit refunding to their wallet, not that one.
+        var altered = "7XKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
+        Assert.NotEqual(SolWallet, altered);
+        var planted = await Deposit(service, from: altered);
+        var customers = await Deposit(service, from: SolWallet);
+        Assert.NotEqual(planted.Address, customers.Address);
+        Assert.Equal(2, fake.Quotes.Count);
+        Assert.Equal(SolWallet, fake.Quotes[1]["refundTo"]!.ToString());
+        Assert.Contains(saved[^1], q => q.Address == customers.Address && q.RefundTo == SolWallet);
+
+        // An EVM wallet is the same in any case, so a second press in another case reuses its deposit.
+        var (evm, evmFake, _) = Create();
+        var first = await evm.CreateWalletDeposit(Config(), "store", Ethereum.PaymentMethodId, "inv1", Ethereum, EthUsdc, 6, EvmWallet, BtcAddress,
+            0.001m, DateTimeOffset.UtcNow.AddHours(1));
+        var again = await evm.CreateWalletDeposit(Config(), "store", Ethereum.PaymentMethodId, "inv1", Ethereum, EthUsdc, 6, EvmWallet.ToLowerInvariant(),
+            BtcAddress, 0.001m, DateTimeOffset.UtcNow.AddHours(1));
+        Assert.Equal(first.Address, again.Address);
+        Assert.Single(evmFake.Quotes);
+    }
+
+    [Theory]
+    [InlineData(AddressFamily.Evm, "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed", "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed", true)]
+    [InlineData(AddressFamily.Solana, "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", "7XKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", false)]
+    [InlineData(AddressFamily.Tron, "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6T", false)]
+    [InlineData(AddressFamily.Solana, "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", true)]
+    public void ComparesWalletsAsTheirChainDoes(AddressFamily family, string a, string b, bool same) =>
+        Assert.Equal(same, IntentsDepositService.SameWallet(family, a, b));
+
+    [Fact]
     public async Task ANewAmountDueGetsANewDepositUpToALimit()
     {
         var (service, fake, _) = Create();

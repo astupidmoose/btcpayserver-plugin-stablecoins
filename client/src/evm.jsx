@@ -3,17 +3,24 @@ import { EthereumProvider as EthereumSdkProvider } from '@lifi/sdk-provider-ethe
 import { erc20Abi } from 'viem';
 import { getChainId, sendTransaction, writeContract } from 'viem/actions';
 import { isNativeToken, register } from './core.jsx';
+import { signsAs } from './offers.js';
 
 // The wallet LI.FI's provider uses, kept for plain transfers (NEAR Intents deposits). LI.FI routes run exactly as before.
 const wallet = {};
 
-/** Sends `amount` of the token from the connected wallet to `to` on `chain`, switching the wallet to that chain first. */
-async function transfer({ chain, token, to, amount }) {
+/**
+ * Sends `amount` of the token from the connected wallet to `to` on `chain`, switching the wallet to that chain first.
+ * Only from `from`: if the wallet changed account meanwhile, nothing is sent (the deposit refunds to `from`).
+ */
+async function transfer({ chain, token, to, amount, from }) {
   if (!wallet.getWalletClient) throw new Error('Connect your wallet first.');
+  const changed = new Error('Your wallet changed accounts. Reconnect it and try again.');
   let client = await wallet.getWalletClient();
+  if (!signsAs(client, from)) throw changed;
   if ((await getChainId(client)) !== chain.id) {
     client = wallet.switchChain ? await wallet.switchChain(chain.id) : null;
     if (!client || (await getChainId(client)) !== chain.id) throw new Error(`Switch your wallet to ${chain.name} and try again.`);
+    if (!signsAs(client, from)) throw changed;
   }
   const common = { account: client.account, chain: client.chain ?? null };
   return isNativeToken(token)
