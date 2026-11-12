@@ -132,6 +132,18 @@
                 <span asp-validation-for="IntentsSlippageBps" class="text-danger"></span>
                 <div class="form-text">The amount shown includes this margin so BTC price moves don't fail the swap. Whatever it doesn't use comes back to your refund address. 50 = 0.5%.</div>
             </div>
+            <div class="d-flex align-items-center mb-3">
+                <input asp-for="IntentsForWallets" type="checkbox" class="btcpay-toggle me-3" />
+                <div>
+                    <label asp-for="IntentsForWallets" class="form-check-label"></label>
+                    <div class="form-text mt-0">
+                        The wallet checkouts above also ask NEAR Intents what the customer's token must be, and pay through it when no route
+                        is found or it asks for less. The customer sees the same panel and signs once: their wallet sends the token to a one-time
+                        NEAR Intents address. Anything NEAR Intents cannot swap, and any excess, goes back to the customer's own wallet.
+                        Uses the NEAR Intents API key above when set.
+                    </div>
+                </div>
+            </div>
 
             <h4 class="mt-5 mb-2">Monero, through Pegasus Swap</h4>
             <p class="text-secondary">

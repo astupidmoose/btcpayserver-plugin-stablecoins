@@ -24,3 +24,11 @@ jobs:
         run: dotnet build src/BTCPayServer.Plugins.Stablecoins -c Release
       - name: Test
         run: dotnet test --project tests/BTCPayServer.Plugins.Stablecoins.Tests -c Release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test the payment panel
+        working-directory: client
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test

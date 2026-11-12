@@ -236,6 +236,8 @@
                             fromChain,
                             btcAddress: swap.btcAddress,
                             btcDue,
+                            nearQuoteUrl: swap.nearQuoteUrl,
+                            nearDepositUrl: swap.nearDepositUrl,
                             appearance: appearance(),
                             primaryColor: getComputedStyle(document.documentElement).getPropertyValue('--btcpay-primary').trim() || undefined,
                             onEvent: (kind, data) => {
@@ -256,7 +258,7 @@
                                 }
                                 if (kind === 'tx' && data && data.txHash) {
                                     this.sent = true;
-                                    reportSource(swap.sourceUrl, { txHash: data.txHash, chainId: data.chainId }).catch(() => {});
+                                    reportSource(swap.sourceUrl, { txHash: data.txHash, chainId: data.chainId, depositAddress: data.depositAddress }).catch(() => {});
                                 }
                             }
                         });

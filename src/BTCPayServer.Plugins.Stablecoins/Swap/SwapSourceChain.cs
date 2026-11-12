@@ -60,6 +60,9 @@ public record SwapSourceChain
 
     public string Image => CoinImage ?? $"Resources/chains/{Code.ToLowerInvariant()}.svg";
 
+    /// <summary>The kind of address a token chain's wallets use (LI.FI only).</summary>
+    public AddressFamily Family => IntentsNetworkCode switch { "sol" => AddressFamily.Solana, "tron" => AddressFamily.Tron, _ => AddressFamily.Evm };
+
     static SwapSourceChain Lifi(string code, string name, long chainId, string intentsNetwork) =>
         new() { Code = code, Name = name, Provider = SwapProvider.Lifi, LifiChainId = chainId, IntentsNetworkCode = intentsNetwork };
 

@@ -107,6 +107,8 @@ public class OneClickQuote
     [JsonProperty("depositMemo")] public string? DepositMemo { get; set; }
     [JsonProperty("amountIn")] public string AmountIn { get; set; } = "0";
     [JsonProperty("amountInFormatted")] public string? AmountInFormatted { get; set; }
+    /// <summary>What the input is worth in US dollars, as NEAR Intents prices it (shown as "about ..." in the wallet panel).</summary>
+    [JsonProperty("amountInUsd")] public decimal? AmountInUsd { get; set; }
     [JsonProperty("minAmountIn")] public string? MinAmountIn { get; set; }
     [JsonProperty("amountOut")] public string AmountOut { get; set; } = "0";
     [JsonProperty("minAmountOut")] public string? MinAmountOut { get; set; }

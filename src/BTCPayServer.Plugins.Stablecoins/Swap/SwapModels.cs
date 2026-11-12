@@ -36,6 +36,12 @@ public class SwapToBtcPaymentMethodConfig
     public string? RefundTron { get; set; }
     /// <summary>Price movement allowed on stablecoin swaps, in basis points. The amount shown includes it; any unused part is refunded.</summary>
     public int IntentsSlippageBps { get; set; } = SwapDefaults.IntentsSlippageBps;
+    /// <summary>
+    /// The wallet checkouts also ask NEAR Intents what the customer's token must be, and pay through it when LI.FI has no
+    /// route or NEAR Intents asks for less of the token. Same panel, same single wallet signature: the wallet sends the
+    /// token to a one-time NEAR Intents deposit address. Refunds go to the customer's own wallet. On unless switched off.
+    /// </summary>
+    public bool IntentsForWallets { get; set; } = true;
     /// <summary>The exchange options switched on (USDC, USDT), offered on the token checkouts. Not payment methods.</summary>
     public string[] ExchangeOptions { get; set; } = [];
     /// <summary>Pegasus Swap partner API keys, for Monero. Stay on the server, in the store setting only, like <see cref="ApiKey"/>.</summary>
