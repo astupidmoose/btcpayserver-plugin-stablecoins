@@ -6,7 +6,8 @@
   "description": "Wallet payment panel embedded in BTCPay checkout. Built into ../src/BTCPayServer.Plugins.Stablecoins/Resources/js/swappanel-*.js",
   "scripts": {
     "build": "node audit.mjs && node build.mjs",
-    "build:offline": "node build.mjs"
+    "build:offline": "node build.mjs",
+    "test": "node --test 'test/*.test.mjs'"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -35,6 +36,7 @@
   "overrides": {
     "tronweb": "6.5.1",
     "axios": "1.20.0",
+    "follow-redirects": "1.16.3",
     "ethers": "6.17.0",
     "ws@>=8": "8.22.0"
   }

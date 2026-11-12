@@ -59,6 +59,14 @@ public class PersistedQuote
     public string Status { get; set; } = "PENDING_DEPOSIT";
     public string DepositedUnits { get; set; } = "0";
     public string[] LoggedTxs { get; set; } = [];
+    /// <summary>A payment from the customer's connected wallet (<see cref="IntentsDepositService.WalletOption"/>): the NEAR Intents asset paid with.</summary>
+    public string? AssetId { get; set; }
+    /// <summary>The token's symbol, for the invoice log (wallet payments).</summary>
+    public string? Symbol { get; set; }
+    /// <summary>Where NEAR Intents returns what it cannot swap, and any excess: the customer's wallet (wallet payments).</summary>
+    public string? RefundTo { get; set; }
+    /// <summary>The token chain (code) the customer paid from (wallet payments).</summary>
+    public string? PaidFrom { get; set; }
 }
 
 /// <summary>
@@ -90,6 +98,10 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         public required IntentsPayment Payment;
         public readonly HashSet<string> LoggedTxs = new(StringComparer.OrdinalIgnoreCase);
         public bool Final => Payment.Status is "SUCCESS" or "REFUNDED" or "FAILED";
+        /// <summary>The customer's wallet, for a wallet payment: where NEAR Intents refunds.</summary>
+        public string? RefundTo;
+        /// <summary>When this server made it; MinValue for one picked up after a restart.</summary>
+        public DateTimeOffset Created = DateTimeOffset.MinValue;
     }
 
     class Entry
@@ -97,6 +109,7 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         public required string InvoiceId;
         public required string StoreId;
         public required PaymentMethodId PaymentMethodId;
+        /// <summary>The exchange option (USDC, USDT), or for a wallet payment the token chain the customer paid from.</summary>
         public required SwapSourceChain Option;
         public required string Network;
         public SwapToBtcPaymentMethodConfig Config = new();
@@ -107,6 +120,14 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         public string? LoggedError;
         public Task? Running;
         public DateTimeOffset Touched;
+        /// <summary>A payment from the customer's connected wallet, in <see cref="AssetId"/>.</summary>
+        public bool Wallet;
+        public string? AssetId;
+        public string? Symbol;
+        /// <summary>One deposit is made at a time per wallet entry, so pressing Pay twice never makes two.</summary>
+        public readonly SemaphoreSlim Creating = new(1, 1);
+        /// <summary>The coin's name in the invoice log.</summary>
+        public string Coin => (Wallet ? Symbol : Option.Ticker) ?? "tokens";
     }
 
     readonly ConcurrentDictionary<string, Entry> _entries = new();
@@ -158,8 +179,10 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
     public Task Pending(string invoiceId, SwapSourceChain option, string network) =>
         _entries.TryGetValue(Key(invoiceId, option, network), out var e) && e.Running is { } t ? t : Task.CompletedTask;
 
-    async Task<string?> ApiKey(Entry entry) =>
-        (secrets is null ? null : (await secrets.GetAsync(entry.StoreId)).IntentsApiKey) ?? entry.Config.IntentsApiKey;
+    Task<string?> ApiKey(Entry entry) => ApiKey(entry.StoreId, entry.Config);
+
+    async Task<string?> ApiKey(string storeId, SwapToBtcPaymentMethodConfig config) =>
+        (secrets is null ? null : (await secrets.GetAsync(storeId)).IntentsApiKey) ?? config.IntentsApiKey;
 
     /// <summary>
     /// The deposit to show on the token checkout for <paramref name="option"/> on <paramref name="network"/>: quoted in the background
@@ -204,6 +227,207 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         Forget(now);
         return result;
     }
+
+    // ---- Payments from the customer's connected wallet ------------------------------------------------------------
+    // The wallet panel asks LI.FI and NEAR Intents what the chosen token must be, and pays through whichever asks less.
+    // A NEAR Intents payment is a plain transfer of that token from the customer's wallet to a one-time deposit address,
+    // made for this invoice's BTC address; what NEAR Intents cannot swap, and any excess, goes back to the customer's wallet.
+
+    /// <summary>The <see cref="PersistedQuote.Option"/> of a payment from the customer's connected wallet.</summary>
+    public const string WalletOption = "WALLET";
+    /// <summary>Pressing Pay again within this time reuses the deposit already made, instead of making another.</summary>
+    static readonly TimeSpan ReuseWalletDepositFor = TimeSpan.FromMinutes(5);
+    /// <summary>A price check is reused this long, so a busy checkout does not ask NEAR Intents on every refresh.</summary>
+    static readonly TimeSpan WalletQuoteFor = TimeSpan.FromSeconds(20);
+
+    /// <summary>How LI.FI names each chain family's native coin.</summary>
+    static readonly string[] EvmNative = ["0x0000000000000000000000000000000000000000", "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"];
+    const string SolanaNative = "11111111111111111111111111111111";
+    const string TronNative = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb";
+
+    public static bool IsNative(AddressFamily family, string token) => family switch
+    {
+        AddressFamily.Evm => EvmNative.Contains(token, StringComparer.OrdinalIgnoreCase),
+        AddressFamily.Solana => token == SolanaNative,
+        _ => token == TronNative
+    };
+
+    /// <summary>
+    /// NEAR Intents' asset for a token the customer holds (LI.FI's address for it) on one chain: the native coin, or the token
+    /// with that exact contract. Only one unambiguous, current match with the same decimals, so an amount is never read in
+    /// the wrong unit and a look-alike token is never taken for another.
+    /// </summary>
+    public static OneClickToken? MatchToken(IEnumerable<OneClickToken> tokens, string blockchain, AddressFamily family, string token, int decimals)
+    {
+        var native = IsNative(family, token);
+        // EVM addresses are hex (any case); Solana and Tron addresses are case-sensitive.
+        var compare = family == AddressFamily.Evm ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var matches = tokens.Where(t => t.Blockchain.Equals(blockchain, StringComparison.OrdinalIgnoreCase) &&
+                                        !t.Symbol.Contains("DEPRECATED", StringComparison.OrdinalIgnoreCase) &&
+                                        (native ? string.IsNullOrEmpty(t.ContractAddress) : string.Equals(t.ContractAddress, token, compare)))
+            .Take(2).ToList();
+        return matches.Count == 1 && matches[0].Decimals == decimals ? matches[0] : null;
+    }
+
+    /// <summary>A NEAR Intents price for paying from the customer's wallet: send <see cref="AmountIn"/> of the token.</summary>
+    public record WalletQuote(string AssetId, BigInteger AmountIn, int Decimals, decimal? AmountInUsd, long TargetSats, long? TimeEstimateSeconds);
+
+    /// <summary>Send exactly <see cref="AmountIn"/> of the token to <see cref="Address"/>.</summary>
+    public record WalletDeposit(string Address, BigInteger AmountIn, int Decimals, DateTimeOffset? Deadline);
+
+    readonly ConcurrentDictionary<(string BtcAddress, string Asset, long Target, string RefundTo), (WalletQuote Quote, DateTimeOffset At)> _walletQuotes = new();
+
+    async Task<(OneClickToken Origin, OneClickToken Btc, string? ApiKey)> WalletAssets(string storeId, SwapToBtcPaymentMethodConfig config,
+        SwapSourceChain paidFrom, string token, int decimals, string fromAddress)
+    {
+        if (paidFrom.Provider != SwapProvider.Lifi || paidFrom.IntentsNetworkCode is not { } network)
+            throw new IntentsWalletException("Not a token chain");
+        if (!IsAddressOf(paidFrom.Family, fromAddress))
+            throw new IntentsWalletException($"{fromAddress} is not a {paidFrom.Name} wallet address");
+        var apiKey = await ApiKey(storeId, config);
+        var tokens = await Tokens(BaseUrl, apiKey);
+        var origin = MatchToken(tokens, network, paidFrom.Family, token, decimals) ??
+                     throw new IntentsWalletException($"NEAR Intents does not take this token on {paidFrom.Name}");
+        var btc = Single(tokens, "btc", "BTC") ?? throw new IntentsWalletException("NEAR Intents lists no BTC");
+        return (origin, btc, apiKey);
+    }
+
+    static bool IsAddressOf(AddressFamily family, string address) => family switch
+    {
+        AddressFamily.Evm => AddressChecks.IsEvmAddress(address),
+        AddressFamily.Solana => AddressChecks.IsSolanaAddress(address),
+        _ => AddressChecks.IsTronAddress(address)
+    };
+
+    OneClickQuoteRequest WalletRequest(SwapToBtcPaymentMethodConfig config, OneClickToken origin, OneClickToken btc, long target, string fromAddress,
+        string btcAddress, DateTimeOffset deadline, bool dry) => new()
+    {
+        Dry = dry,
+        SwapType = "EXACT_OUTPUT",
+        SlippageTolerance = Math.Clamp(config.IntentsSlippageBps, 1, 1000),
+        OriginAsset = origin.AssetId,
+        DestinationAsset = btc.AssetId,
+        Amount = target.ToString(CultureInfo.InvariantCulture),
+        // The customer paid from their own wallet: NEAR Intents returns what it cannot swap, and any excess, there.
+        RefundTo = fromAddress,
+        Recipient = btcAddress,
+        Deadline = deadline.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture)
+    };
+
+    /// <summary>Checks an exact-output quote's amounts: some input, and at least the BTC due to this invoice's address.</summary>
+    static (BigInteger AmountIn, long AmountOut) CheckAmounts(OneClickQuote quote, long target)
+    {
+        if (!BigInteger.TryParse(quote.AmountIn, NumberStyles.None, CultureInfo.InvariantCulture, out var amountIn) || amountIn <= 0)
+            throw new IntentsWalletException($"The quote has no amount ({quote.AmountIn})");
+        if (!long.TryParse(quote.AmountOut, NumberStyles.None, CultureInfo.InvariantCulture, out var amountOut) || amountOut < target)
+            throw new IntentsWalletException($"The quote pays {quote.AmountOut} satoshis, less than the {target} due");
+        return (amountIn, amountOut);
+    }
+
+    /// <summary>
+    /// What the customer's <paramref name="token"/> must be, through NEAR Intents, to deliver the BTC due (plus the store's
+    /// buffer) to <paramref name="btcAddress"/>. A price check only (a dry quote): nothing is made at NEAR Intents.
+    /// Throws <see cref="IntentsWalletException"/> when NEAR Intents cannot do it.
+    /// </summary>
+    public async Task<WalletQuote> QuoteWallet(SwapToBtcPaymentMethodConfig config, string storeId, SwapSourceChain paidFrom, string token,
+        int decimals, string fromAddress, string btcAddress, decimal btcDue, CancellationToken cancellationToken)
+    {
+        var target = TargetUnits(btcDue, config.BufferPercent);
+        var (origin, btc, apiKey) = await WalletAssets(storeId, config, paidFrom, token, decimals, fromAddress);
+        var now = Now();
+        var key = (btcAddress, origin.AssetId, target, fromAddress);
+        if (_walletQuotes.TryGetValue(key, out var cached) && now - cached.At < WalletQuoteFor)
+            return cached.Quote;
+        var response = await client.Quote(BaseUrl, apiKey, WalletRequest(config, origin, btc, target, fromAddress, btcAddress, now.AddMinutes(30), dry: true),
+            cancellationToken);
+        var (amountIn, _) = CheckAmounts(response.Quote, target);
+        var result = new WalletQuote(origin.AssetId, amountIn, origin.Decimals, response.Quote.AmountInUsd, target, response.Quote.TimeEstimate);
+        foreach (var (k, old) in _walletQuotes.ToArray())
+            if (now - old.At >= WalletQuoteFor)
+                _walletQuotes.TryRemove(k, out _);
+        _walletQuotes[key] = (result, now);
+        return result;
+    }
+
+    Entry WalletEntry(string invoiceId, string storeId, PaymentMethodId pmi, SwapSourceChain paidFrom, string network, string assetId, string? symbol) =>
+        _entries.GetOrAdd($"{invoiceId}:{WalletOption}:{assetId}", _ => new Entry
+        {
+            InvoiceId = invoiceId, StoreId = storeId, PaymentMethodId = pmi, Option = paidFrom, Network = network,
+            Wallet = true, AssetId = assetId, Symbol = symbol
+        });
+
+    /// <summary>
+    /// Makes the NEAR Intents deposit the customer's wallet pays: an exact-output quote for the BTC due to this invoice's
+    /// address, refunding to the customer's wallet. It is saved on the invoice, and followed like every other deposit,
+    /// before its address is returned: an address that a restart could lose is never paid. Pressing Pay again shortly after
+    /// reuses it. Throws <see cref="IntentsWalletException"/> when no deposit can be made.
+    /// </summary>
+    public async Task<WalletDeposit> CreateWalletDeposit(SwapToBtcPaymentMethodConfig config, string storeId, PaymentMethodId pmi, string invoiceId,
+        SwapSourceChain paidFrom, string token, int decimals, string fromAddress, string btcAddress, decimal btcDue, DateTimeOffset invoiceExpiry)
+    {
+        var target = TargetUnits(btcDue, config.BufferPercent);
+        var (origin, btc, apiKey) = await WalletAssets(storeId, config, paidFrom, token, decimals, fromAddress);
+        var entry = WalletEntry(invoiceId, storeId, pmi, paidFrom, paidFrom.IntentsNetworkCode!, origin.AssetId, origin.Symbol);
+        await entry.Creating.WaitAsync();
+        try
+        {
+            var now = Now();
+            lock (entry)
+            {
+                entry.Touched = now;
+                entry.Config = config;
+                var recent = entry.Quotes.LastOrDefault(q => q.Payment.TargetSats == target && q.Payment.Status == "PENDING_DEPOSIT" &&
+                                                             string.Equals(q.RefundTo, fromAddress, StringComparison.OrdinalIgnoreCase) &&
+                                                             now - q.Created < ReuseWalletDepositFor && !Expired(q, now));
+                if (recent is not null)
+                    return new WalletDeposit(recent.Payment.Address, recent.Payment.AmountUnits, recent.Payment.Decimals, recent.Payment.Deadline);
+                if (entry.Quotes.Count >= MaxQuotesPerEntry)
+                    throw new IntentsWalletException("Too many deposits for this invoice and token");
+            }
+            var deadline = (invoiceExpiry > now.AddMinutes(30) ? invoiceExpiry : now.AddMinutes(30)) + DeadlineMargin;
+            var response = await client.Quote(BaseUrl, apiKey, WalletRequest(config, origin, btc, target, fromAddress, btcAddress, deadline, dry: false),
+                CancellationToken.None);
+            var quote = response.Quote;
+            if (string.IsNullOrEmpty(quote.DepositAddress))
+                throw new IntentsWalletException("The quote has no deposit address");
+            // A wallet transfer carries no memo: a deposit that needs one could not be matched to this payment.
+            if (!string.IsNullOrEmpty(quote.DepositMemo))
+                throw new IntentsWalletException("The deposit needs a memo, which a wallet transfer cannot carry");
+            if (!IsAddressOf(paidFrom.Family, quote.DepositAddress))
+                throw new IntentsWalletException($"The deposit address {quote.DepositAddress} is not a {paidFrom.Name} address");
+            var (amountIn, amountOut) = CheckAmounts(quote, target);
+            var payment = new IntentsPayment(entry.Network, ToDecimal(amountIn, origin.Decimals), amountIn, origin.Decimals, quote.DepositAddress,
+                null, quote.Deadline ?? deadline, target, quote.TimeEstimate, "PENDING_DEPOSIT", BigInteger.Zero, now);
+            var made = new Quote { Payment = payment, RefundTo = fromAddress, Created = now };
+            lock (entry)
+                entry.Quotes.Add(made);
+            if (!await Save(entry))
+            {
+                lock (entry)
+                    entry.Quotes.Remove(made);
+                throw new IntentsWalletException("The deposit could not be saved on the invoice");
+            }
+            await Log(invoiceId,
+                $"Wallet payment on {paidFrom.Name}: the customer's wallet {fromAddress} is to send {payment.Amount} {origin.Symbol} to NEAR Intents " +
+                $"deposit {payment.Address}. Quote {response.CorrelationId}: {amountOut} satoshis to {btcAddress}, deposit deadline {payment.Deadline:u}. " +
+                $"Anything NEAR Intents cannot swap, and any excess, is refunded to the customer's wallet {fromAddress}. Quote signature: {response.Signature}");
+            // Support can find the invoice by the deposit address, the quote id, or the customer's wallet (as wallets show it, too).
+            await SearchTerms(invoiceId, payment.Address, response.CorrelationId, fromAddress, SourceVerifier.Checksummed(fromAddress));
+            return new WalletDeposit(payment.Address, amountIn, origin.Decimals, payment.Deadline);
+        }
+        finally
+        {
+            entry.Creating.Release();
+        }
+    }
+
+    /// <summary>True when <paramref name="depositAddress"/> is a wallet deposit made for this invoice.</summary>
+    public bool HasWalletDeposit(string invoiceId, string depositAddress) =>
+        _entries.Values.Where(e => e.Wallet && e.InvoiceId == invoiceId).Any(e =>
+        {
+            lock (e)
+                return e.Quotes.Any(q => q.Payment.Address == depositAddress);
+        });
 
     static bool Expired(Quote q, DateTimeOffset now) => q.Payment.Deadline is { } d && now > d;
 
@@ -288,7 +512,7 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
 
     async Task Recheck(Entry entry, Quote quote)
     {
-        var chain = entry.Option;
+        var coin = entry.Coin;
         var payment = quote.Payment;
         var updated = payment with { CheckedAt = Now() };
         var changed = false;
@@ -299,10 +523,10 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
             updated = updated with { Status = string.IsNullOrEmpty(status.Status) ? payment.Status : status.Status, DepositedUnits = deposited };
             changed = updated.Status != payment.Status || updated.DepositedUnits != payment.DepositedUnits;
             if (updated.Status != payment.Status)
-                await Log(entry.InvoiceId, $"{chain.Ticker} deposit to {payment.Address}: {updated.Status}" +
+                await Log(entry.InvoiceId, $"{coin} deposit to {payment.Address}: {updated.Status}" +
                                            (status.SwapDetails?.RefundReason is { } reason ? $" ({reason})" : ""),
                     updated.Status is "REFUNDED" or "FAILED" ? InvoiceEventData.EventSeverity.Warning : InvoiceEventData.EventSeverity.Info);
-            changed |= await LogTxs(entry.InvoiceId, quote, status.SwapDetails?.OriginChainTxHashes, $"Customer's {chain.Ticker} deposit transaction");
+            changed |= await LogTxs(entry.InvoiceId, quote, status.SwapDetails?.OriginChainTxHashes, $"Customer's {coin} deposit transaction");
             changed |= await LogTxs(entry.InvoiceId, quote, status.SwapDetails?.DestinationChainTxHashes, "NEAR Intents' BTC payout transaction");
         }
         catch (OneClickException ex) when (ex.Status == 404)
@@ -311,7 +535,7 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not check the {Coin} deposit {Address}", chain.Ticker, payment.Address);
+            logger.LogWarning(ex, "Could not check the {Coin} deposit {Address}", coin, payment.Address);
         }
         lock (entry)
             quote.Payment = updated;
@@ -365,7 +589,8 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
                     continue;
                 var config = await storeRepository.GetSettingAsync<SwapToBtcPaymentMethodConfig>(invoice.StoreId, Controllers.UISwapStoreController.StoreSettingName)
                              ?? new SwapToBtcPaymentMethodConfig();
-                foreach (var group in saved.GroupBy(q => (q.Option, q.Network)))
+                RestoreWallet(invoice.Id, invoice.StoreId, chain, config, saved);
+                foreach (var group in saved.Where(q => q.Option != WalletOption).GroupBy(q => (q.Option, q.Network)))
                 {
                     if (SwapSourceChain.ExchangeOptions.FirstOrDefault(o => o.Code == group.Key.Option) is not { } option ||
                         option.Networks.All(n => n.Code != group.Key.Network))
@@ -399,23 +624,61 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
     }
 
     /// <summary>Writes the invoice's quotes for this payment method into its prompt details.</summary>
-    async Task Save(Entry entry)
+    /// <summary>
+    /// Picks up the wallet payments saved on an invoice (tests call it directly). Each is followed again until NEAR Intents
+    /// settles or refunds it.
+    /// </summary>
+    public void RestoreWallet(string invoiceId, string storeId, SwapSourceChain checkout, SwapToBtcPaymentMethodConfig config, IEnumerable<PersistedQuote> saved)
+    {
+        foreach (var group in saved.Where(q => q.Option == WalletOption && !string.IsNullOrEmpty(q.AssetId)).GroupBy(q => q.AssetId!))
+        {
+            var first = group.First();
+            var paidFrom = SwapSourceChain.Find(first.PaidFrom) is { Provider: SwapProvider.Lifi } c ? c : checkout;
+            var entry = WalletEntry(invoiceId, storeId, checkout.PaymentMethodId, paidFrom, first.Network, group.Key, first.Symbol);
+            lock (entry)
+            {
+                entry.Config = config;
+                entry.Touched = Now();
+                foreach (var q in group)
+                {
+                    if (entry.Quotes.Any(e => e.Payment.Address == q.Address))
+                        continue;
+                    var units = BigInteger.Parse(q.AmountUnits, CultureInfo.InvariantCulture);
+                    var quote = new Quote
+                    {
+                        Payment = new IntentsPayment(q.Network, ToDecimal(units, q.Decimals), units, q.Decimals, q.Address, q.Memo, q.Deadline, q.TargetSats,
+                            q.TimeEstimateSeconds, q.Status, BigInteger.Parse(q.DepositedUnits, CultureInfo.InvariantCulture), DateTimeOffset.MinValue),
+                        RefundTo = q.RefundTo
+                    };
+                    foreach (var tx in q.LoggedTxs)
+                        quote.LoggedTxs.Add(tx);
+                    entry.Quotes.Add(quote);
+                }
+            }
+        }
+    }
+
+    /// <summary>Where the invoice's quotes are saved instead of its prompt details; set by tests. Throwing is a failed save.</summary>
+    public Func<string, PaymentMethodId, List<PersistedQuote>, Task>? WriteQuotes { get; set; }
+
+    /// <summary>True when the invoice's quotes were written.</summary>
+    async Task<bool> Save(Entry entry)
     {
         var gate = PromptDetailsGate.For(entry.InvoiceId);
         await gate.WaitAsync();
         try
         {
-            var invoice = await invoiceRepository.GetInvoice(entry.InvoiceId);
-            if (invoice?.GetPaymentPrompt(entry.PaymentMethodId) is not { Details: { } details })
-                return;
-            var parsed = details.ToObject<SwapToBtcPromptDetails>(DetailsSerializer) ?? new SwapToBtcPromptDetails();
             var all = _entries.Values.Where(e => e.InvoiceId == entry.InvoiceId && e.PaymentMethodId == entry.PaymentMethodId).ToArray();
-            parsed.IntentsQuotes = all.SelectMany(e =>
+            var quotes = all.SelectMany(e =>
             {
                 lock (e)
                     return e.Quotes.Select(q => new PersistedQuote
                     {
-                        Option = e.Option.Code,
+                        Option = e.Wallet ? WalletOption : e.Option.Code,
+                        AssetId = e.Wallet ? e.AssetId : null,
+                        Symbol = e.Wallet ? e.Symbol : null,
+                        RefundTo = q.RefundTo,
+                        PaidFrom = e.Wallet ? e.Option.Code : null,
                         Network = e.Network,
                         Address = q.Payment.Address,
                         Memo = q.Payment.Memo,
@@ -429,11 +692,23 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
                         LoggedTxs = q.LoggedTxs.ToArray()
                     }).ToList();
             }).ToList();
+            if (WriteQuotes is not null)
+            {
+                await WriteQuotes(entry.InvoiceId, entry.PaymentMethodId, quotes);
+                return true;
+            }
+            var invoice = await invoiceRepository.GetInvoice(entry.InvoiceId);
+            if (invoice?.GetPaymentPrompt(entry.PaymentMethodId) is not { Details: { } details })
+                return false;
+            var parsed = details.ToObject<SwapToBtcPromptDetails>(DetailsSerializer) ?? new SwapToBtcPromptDetails();
+            parsed.IntentsQuotes = quotes;
             await invoiceRepository.UpdatePaymentDetails(entry.InvoiceId, entry.PaymentMethodId, Newtonsoft.Json.Linq.JObject.FromObject(parsed, DetailsSerializer));
+            return true;
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not save the NEAR Intents quotes of invoice {InvoiceId}", entry.InvoiceId);
+            return false;
         }
         finally
         {
@@ -532,3 +807,6 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
         }
     }
 }
+
+/// <summary>NEAR Intents cannot take this wallet payment; the reason is for the invoice log and the server log, not the customer.</summary>
+public class IntentsWalletException(string message) : Exception(message);

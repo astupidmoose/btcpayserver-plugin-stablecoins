@@ -1,8 +1,10 @@
 // Shared core of the payment panel bundles (evm.jsx, solana.jsx, tron.jsx).
 // The customer sees a plain token payment: connect a wallet, pick one of their
-// tokens on this chain, and pay the exact amount shown. Behind it, LI.FI quotes
-// what that token must be to deliver the BTC still due, and its bridges deliver
-// the BTC to the invoice's own address. BTC never appears in this panel.
+// tokens on this chain, and pay the exact amount shown. Behind it, LI.FI and
+// NEAR Intents both quote what that token must be to deliver the BTC still due,
+// and the lower one is shown and paid: a LI.FI route, or a plain transfer to a
+// one-time NEAR Intents deposit address. Either way the BTC goes to the
+// invoice's own address. BTC never appears in this panel.
 import { createRoot } from 'react-dom/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -20,6 +22,7 @@ import {
   getTokens,
 } from '@lifi/sdk';
 import { useEthereumContext, useSDKProviders, useTronContext } from '@lifi/widget-provider';
+import { cheapest, withinShown } from './offers.js';
 import { useAccount, useWalletMenu, WalletManagementProviders } from '@lifi/wallet-management';
 
 export const BTC_CHAIN_ID = 20000000000001;
@@ -33,6 +36,18 @@ export const TRON_CHAIN_ID = 728126428;
 const MIN_ACCEPTED_OUTPUT = 0.99;
 const QUOTE_REFRESH_MS = 45_000;
 const MIN_BALANCE_USD = 0.5;
+export { isNativeToken } from './offers.js';
+
+async function postJson(url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
 
 const WALLETCONNECT_ICON = 'data:image/svg+xml;utf8,' + encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#3B99FC"/>' +
@@ -101,7 +116,7 @@ function TokenIcon({ token }) {
     : <span className="rounded-circle bg-secondary flex-shrink-0" style={{ width: 28, height: 28 }} />;
 }
 
-function Panel({ opts, client, chain }) {
+function Panel({ opts, client, chain, transfer }) {
   const sdkProviders = useSDKProviders();
   useEffect(() => { client.setProviders(sdkProviders); }, [client, sdkProviders]);
   const { account } = useAccount({ chainType: chain.chainType });
@@ -159,32 +174,58 @@ function Panel({ opts, client, chain }) {
     return () => { cancelled = true; };
   }, [client, chain, address, opts]);
 
-  // What the chosen token must be to deliver the BTC due. Refreshed while the customer decides.
+  // LI.FI's price for the chosen token: a route that delivers the BTC due.
+  const lifiOffer = useCallback(async () => {
+    const q = await getQuote(client, {
+      fromChain: chain.id,
+      fromToken: token.address,
+      fromAddress: address,
+      toChain: BTC_CHAIN_ID,
+      toToken: BTC_TOKEN,
+      toAddress: opts.btcAddress,
+      toAmount: toSats(opts.btcDue),
+      ...(opts.fee > 0 ? { fee: opts.fee } : {}),
+    });
+    // The route's worst case must still cover the invoice: otherwise the customer pays in full and the invoice stays partly unpaid.
+    const minOut = q.estimate?.toAmountMin ? BigInt(q.estimate.toAmountMin) : null;
+    return {
+      route: 'lifi',
+      lifi: q,
+      fromAmount: BigInt(q.action.fromAmount),
+      amountUsd: q.estimate?.fromAmountUSD,
+      feesUsd: feesUsd(q),
+      safe: minOut !== null && minOut * 100n >= BigInt(toSats(opts.btcDue)) * BigInt(Math.round(MIN_ACCEPTED_OUTPUT * 100)),
+    };
+  }, [client, chain, address, token, opts]);
+
+  // NEAR Intents' price for the same token, through this store's server (which keeps the API key): an exact-output
+  // quote for the BTC due, so it covers the invoice by construction. Only where the store offers it.
+  const nearOffer = useCallback(async () => {
+    if (!opts.nearQuoteUrl || !transfer) throw new Error('not offered');
+    const r = await postJson(opts.nearQuoteUrl, { chainId: chain.id, token: token.address, decimals: token.decimals, fromAddress: address });
+    // The amount is in the token's smallest unit: refuse one counted in other units.
+    if (r.decimals !== token.decimals || !(BigInt(r.amountIn) > 0n)) throw new Error('unexpected price');
+    return { route: 'near', fromAmount: BigInt(r.amountIn), amountUsd: r.amountInUsd, feesUsd: 0, safe: true };
+  }, [chain, address, token, opts, transfer]);
+
+  // What the chosen token must be to deliver the BTC due, from whichever asks for less. Refreshed while the customer decides.
   const requestQuote = useCallback(async () => {
     if (!address || !token) return;
     const seq = ++quoteSeq.current;
     setQuoteError(null);
-    try {
-      const q = await getQuote(client, {
-        fromChain: chain.id,
-        fromToken: token.address,
-        fromAddress: address,
-        toChain: BTC_CHAIN_ID,
-        toToken: BTC_TOKEN,
-        toAddress: opts.btcAddress,
-        toAmount: toSats(opts.btcDue),
-        ...(opts.fee > 0 ? { fee: opts.fee } : {}),
-      });
-      if (seq === quoteSeq.current) setQuote(q);
-    } catch (e) {
-      if (seq === quoteSeq.current) {
-        setQuote(null);
-        setQuoteError(errorText(e));
-        // Lets the checkout offer the store's other networks.
-        opts.onEvent('unpayable', errorText(e));
-      }
+    const [lifi, near] = await Promise.allSettled([lifiOffer(), nearOffer()]);
+    if (seq !== quoteSeq.current) return;
+    const lifiValue = lifi.status === 'fulfilled' ? lifi.value : null;
+    const best = cheapest([lifiValue, near.status === 'fulfilled' ? near.value : null]);
+    // Neither can pay: LI.FI's unsafe route is still shown, with its warning; otherwise LI.FI's reason.
+    setQuote(best || lifiValue);
+    if (!best && !lifiValue) {
+      const reason = errorText(lifi.status === 'rejected' ? lifi.reason : new Error('No route'));
+      setQuoteError(reason);
+      // Lets the checkout offer the store's other networks.
+      opts.onEvent('unpayable', reason);
     }
-  }, [client, chain, address, token, opts]);
+  }, [address, token, lifiOffer, nearOffer, opts]);
 
   useEffect(() => {
     setQuote(null);
@@ -194,26 +235,69 @@ function Panel({ opts, client, chain }) {
     return () => clearInterval(timer);
   }, [requestQuote, status]);
 
-  const fromAmount = quote ? BigInt(quote.action.fromAmount) : null;
+  const fromAmount = quote ? quote.fromAmount : null;
   const enough = fromAmount !== null && token && token.amount >= fromAmount;
-  // The route's worst case must still cover the invoice: otherwise the customer pays in full and the invoice stays partly unpaid.
-  const minOut = quote?.estimate?.toAmountMin ? BigInt(quote.estimate.toAmountMin) : null;
-  const safe = minOut !== null && minOut * 100n >= BigInt(toSats(opts.btcDue)) * BigInt(Math.round(MIN_ACCEPTED_OUTPUT * 100));
+  const safe = !!quote?.safe;
 
   // A step is signed once its swap or bridge transaction went out, unless it finally failed (a reverted one keeps
   // its txHash). A failure that is not final, such as lost tracking, may still land, so it still counts.
   const sent = (a) => a.txHash && (a.type === 'SWAP' || a.type === 'CROSS_CHAIN') && !(a.status === 'FAILED' && a.txFinal === true);
   const signed = (step) => (step.execution?.actions || []).some(sent);
 
+  // The amount of a NEAR Intents deposit the customer was already shown, per token, so a second press sends it.
+  const acceptedDeposit = useRef(null);
+
+  // Through NEAR Intents: the server makes (or reuses) the deposit for this invoice, then the wallet sends the token
+  // to it in one plain transfer. What NEAR Intents cannot swap, and any excess, goes back to this wallet.
+  const payNear = async () => {
+    setStatus('paying'); setPayError(null);
+    let deposit;
+    try {
+      const r = await postJson(opts.nearDepositUrl, { chainId: chain.id, token: token.address, decimals: token.decimals, fromAddress: address });
+      if (!r.depositAddress || r.decimals !== token.decimals) throw new Error('This payment could not be prepared. Please try again.');
+      deposit = { address: r.depositAddress, amount: BigInt(r.amountIn) };
+    } catch (e) {
+      setStatus('failed'); setPayError(errorText(e));
+      return;
+    }
+    const seen = acceptedDeposit.current;
+    const shownBefore = seen && seen.token === token.address && seen.address === deposit.address && seen.amount === deposit.amount;
+    // Never send more than the customer saw, beyond a rounding margin: show the new amount and let them press Pay again.
+    if (!shownBefore && !withinShown(deposit.amount, quote.fromAmount)) {
+      acceptedDeposit.current = { token: token.address, address: deposit.address, amount: deposit.amount };
+      setStatus('failed');
+      setPayError(`The amount needed went up to ${formatAmount(deposit.amount, token.decimals)} ${token.symbol}. Press Pay again to send it.`);
+      return;
+    }
+    if (token.amount < deposit.amount) {
+      setStatus('failed'); setPayError(`Not enough ${token.symbol} in this wallet. Pick another token.`);
+      return;
+    }
+    opts.onEvent('started', { action: { fromAddress: address, fromToken: { symbol: token.symbol, decimals: token.decimals }, fromAmount: deposit.amount.toString() } });
+    try {
+      const txHash = await transfer({ client, chain, token, to: deposit.address, amount: deposit.amount, from: address });
+      opts.onEvent('tx', { txHash, chainId: chain.id, type: 'TRANSFER', depositAddress: deposit.address });
+      acceptedDeposit.current = null;
+      setStatus('sent');
+      opts.onEvent('completed', null);
+    } catch (e) {
+      setStatus('failed');
+      setPayError(errorText(e));
+      opts.onEvent('failed', e);
+    }
+  };
+
   const pay = async () => {
     if (!quote || !enough || !safe) return;
+    if (quote.route === 'near') return payNear();
+    const lifiQuote = quote.lifi;
     setStatus('paying'); setPayError(null);
     const requested = BigInt(toSats(opts.btcDue));
     const seen = new Set();
     let last = null;
     try {
-      opts.onEvent('started', quote);
-      await executeRoute(client, convertQuoteToRoute(quote), {
+      opts.onEvent('started', lifiQuote);
+      await executeRoute(client, convertQuoteToRoute(lifiQuote), {
         acceptExchangeRateUpdateHook: async ({ newToAmount }) =>
           BigInt(newToAmount) * 100n >= requested * BigInt(Math.round(MIN_ACCEPTED_OUTPUT * 100)),
         updateRouteHook: (route) => {
@@ -231,7 +315,7 @@ function Panel({ opts, client, chain }) {
         },
       });
       setStatus('sent');
-      opts.onEvent('completed', quote);
+      opts.onEvent('completed', lifiQuote);
     } catch (e) {
       // Once every step is signed the BTC is on its way even if tracking fails.
       if (last?.steps.every(signed)) { setStatus('sent'); return; }
@@ -334,10 +418,10 @@ function Panel({ opts, client, chain }) {
               <>
                 <div className="text-muted small">Amount to pay</div>
                 <div className="fs-3 fw-semibold">{formatAmount(fromAmount, token.decimals)} {token.symbol}</div>
-                {show(quote.estimate?.fromAmountUSD) && (
+                {show(quote.amountUsd) && (
                   <div className="text-muted small">
-                    {`about ${show(quote.estimate?.fromAmountUSD)}`}
-                    {feesUsd(quote) > 0 && show(feesUsd(quote)) ? ` · network fees about ${show(feesUsd(quote))}` : ''}
+                    {`about ${show(quote.amountUsd)}`}
+                    {quote.feesUsd > 0 && show(quote.feesUsd) ? ` · network fees about ${show(quote.feesUsd)}` : ''}
                   </div>
                 )}
               </>
@@ -364,7 +448,7 @@ function Panel({ opts, client, chain }) {
   );
 }
 
-function App({ opts, providers }) {
+function App({ opts, providers, transfer }) {
   const queryClient = useMemo(() => new QueryClient(), []);
   const client = useMemo(() => createClient({
     integrator: opts.integrator,
@@ -402,7 +486,7 @@ function App({ opts, providers }) {
           config={{ enabledChainTypes: [chain.chainType] }}
           providers={providers}
           chains={[chain]}>
-          <Panel opts={opts} client={client} chain={chain} />
+          <Panel opts={opts} client={client} chain={chain} transfer={transfer} />
         </WalletManagementProviders>
       </ThemeProvider>
     </QueryClientProvider>
@@ -411,11 +495,11 @@ function App({ opts, providers }) {
 
 const roots = new WeakMap();
 
-function mount(element, opts, providers) {
+function mount(element, opts, providers, transfer) {
   unmount(element);
   const root = createRoot(element);
   roots.set(element, root);
-  root.render(<App opts={{ onEvent: () => {}, ...opts }} providers={providers} />);
+  root.render(<App opts={{ onEvent: () => {}, ...opts }} providers={providers} transfer={transfer} />);
 }
 
 function unmount(element) {
@@ -427,10 +511,12 @@ function unmount(element) {
 }
 
 // Each bundle carries the wallets for one family of chains, so a checkout only downloads what it needs.
-export function register(family, makeProviders) {
+// transfer({ client, chain, token, to, amount, from }) sends a plain token transfer from the connected wallet (for
+// NEAR Intents deposits) and resolves to its transaction id.
+export function register(family, makeProviders, transfer) {
   window.StablecoinsSwapPanels = window.StablecoinsSwapPanels || {};
   window.StablecoinsSwapPanels[family] = {
-    mount: (element, opts) => mount(element, opts, makeProviders(opts)),
+    mount: (element, opts) => mount(element, opts, makeProviders(opts), transfer),
     unmount,
   };
 }

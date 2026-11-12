@@ -33,10 +33,21 @@ public class CheckoutNotes : IDisposable
             return keys.Count < MaxNotesPerInvoice && keys.Add(key);
     }
 
+    /// <summary>
+    /// Price checks the wallet panel repeats while the customer decides (every 45 seconds, and on each token picked): their
+    /// own, larger budget per caller, so they never use up the one for notes and deposits.
+    /// </summary>
+    public const int MaxQuotesPerCaller = 200;
+
     /// <summary>A fixed window per remote address.</summary>
-    public bool AllowCaller(string? address)
+    public bool AllowCaller(string? address) => Allow("caller:", address, MaxRequestsPerCaller);
+
+    /// <summary>A fixed window per remote address, for price checks.</summary>
+    public bool AllowQuote(string? address) => Allow("quote:", address, MaxQuotesPerCaller);
+
+    bool Allow(string prefix, string? address, int max)
     {
-        var counter = _cache.GetOrCreate("caller:" + (address ?? "unknown"), e =>
+        var counter = _cache.GetOrCreate(prefix + (address ?? "unknown"), e =>
         {
             e.AbsoluteExpirationRelativeToNow = CallerWindow;
             e.Size = 1;
@@ -45,7 +56,7 @@ public class CheckoutNotes : IDisposable
         if (counter is null)
             return false;
         lock (counter)
-            return ++counter[0] <= MaxRequestsPerCaller;
+            return ++counter[0] <= max;
     }
 
     public void Dispose() => _cache.Dispose();

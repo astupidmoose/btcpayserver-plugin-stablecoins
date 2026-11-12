@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.0
+
+- **NEAR Intents in the wallet checkout, as backup and when cheaper:** for the token the customer picks, the panel asks LI.FI and NEAR Intents what it must be to deliver the BTC due, and shows and pays the lower one. Same panel, same single signature: a NEAR Intents payment is a plain transfer from the wallet to a one-time deposit address made for this invoice. Makes tokens LI.FI cannot route payable (most of Solana and Tron), and is often cheaper (about 3% instead of about 5% for SOL on a ~$75 order in testing).
+  - Refunds of a NEAR Intents wallet payment (too late, too little, any excess) go to the customer's own wallet, not the store's refund address.
+  - The deposit is saved on the invoice before its address is used, and followed like the exchange deposits, across restarts. Pressing Pay again within five minutes reuses it.
+  - A token is matched by chain, exact contract and decimals; anything ambiguous, deprecated or with a memo is not offered through NEAR Intents.
+  - On for every store; "Also price wallet payments with NEAR Intents" switches it off.
+- **Panel tests:** the offer choice and the Solana transfer encoding have their own tests (`npm test` in `client/`), run by CI.
+- **Dependency:** `follow-redirects` pinned to 1.16.3 (GHSA-mrwp-f3q8-3g9p in 1.16.0-1.16.1, through tronweb's axios).
+
 ## 0.12.2
 
 - **Earlier swaps become searchable:** once after the update, swaps checked before 0.12.1 that LI.FI reported failed or refunded become searchable by their transaction hash and the customer's wallet. Each is asked about again and follows the same rules as a new swap. Before, only swaps checked after the update were covered.

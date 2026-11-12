@@ -59,6 +59,7 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             RefundSolana = any.RefundSolana,
             RefundTron = any.RefundTron,
             IntentsSlippageBps = any.IntentsSlippageBps,
+            IntentsForWallets = any.IntentsForWallets,
             PegasusPublicKey = any.PegasusPublicKey,
             PegasusSecret = any.PegasusSecret,
             RefundMonero = any.RefundMonero,
@@ -93,6 +94,7 @@ public class UISwapStoreController(StoreRepository storeRepository, PaymentMetho
             RefundSolana = Clean(vm.RefundSolana),
             RefundTron = Clean(vm.RefundTron),
             IntentsSlippageBps = vm.IntentsSlippageBps,
+            IntentsForWallets = vm.IntentsForWallets,
             PegasusPublicKey = Clean(vm.PegasusPublicKey),
             PegasusSecret = Clean(vm.PegasusSecret),
             RefundMonero = Clean(vm.RefundMonero)
@@ -231,6 +233,9 @@ public class SwapSettingsViewModel
     [Display(Name = "Stablecoin price tolerance (basis points)")]
     [Range(1, 1000)]
     public int IntentsSlippageBps { get; set; } = SwapDefaults.IntentsSlippageBps;
+
+    [Display(Name = "Also price wallet payments with NEAR Intents")]
+    public bool IntentsForWallets { get; set; } = true;
 
 
     public List<SwapChainViewModel> Chains { get; set; } = new();

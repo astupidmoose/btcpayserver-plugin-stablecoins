@@ -215,6 +215,9 @@ public class SwapToBtcCheckoutModelExtension(
             ["displayCurrency"] = display.Currency,
             ["btcPrice"] = display.BtcPrice?.ToString(CultureInfo.InvariantCulture),
             ["sourceUrl"] = context.UrlHelper.Content($"~/plugins/stablecoins/swaps/{invoice.Id}/{handler.PaymentMethodId}/source"),
+            // NEAR Intents as a second price for the same token, used when LI.FI has none or asks for more.
+            ["nearQuoteUrl"] = config.IntentsForWallets ? context.UrlHelper.Content($"~/plugins/stablecoins/swaps/{invoice.Id}/{handler.PaymentMethodId}/near/quote") : null,
+            ["nearDepositUrl"] = config.IntentsForWallets ? context.UrlHelper.Content($"~/plugins/stablecoins/swaps/{invoice.Id}/{handler.PaymentMethodId}/near/deposit") : null,
             // "Pay from another network": the store's other token chains, paid into this same BTC address.
             ["networks"] = new JArray(EnabledChains(context).Select(c => new JObject
             {
