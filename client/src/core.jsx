@@ -22,7 +22,7 @@ import {
   getTokens,
 } from '@lifi/sdk';
 import { useEthereumContext, useSDKProviders, useTronContext } from '@lifi/widget-provider';
-import { cheapest, withinShown } from './offers.js';
+import { cheapest, solanaErrorText, withinShown } from './offers.js';
 import { useAccount, useWalletMenu, WalletManagementProviders } from '@lifi/wallet-management';
 
 export const BTC_CHAIN_ID = 20000000000001;
@@ -107,7 +107,7 @@ function errorText(e) {
   const message = (e && (e.cause?.shortMessage || e.shortMessage || e.message)) || String(e);
   if (/user rejected|denied|rejected the request/i.test(message)) return 'You cancelled the transaction in your wallet.';
   if (/no available quotes|no route|not find any route|NotFound/i.test(message)) return 'No swap route is available for this token right now. Try another token.';
-  return message;
+  return solanaErrorText(message) ?? message;
 }
 
 function TokenIcon({ token }) {

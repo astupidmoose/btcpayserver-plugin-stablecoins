@@ -52,3 +52,46 @@ test('refuses a mint that no token program owns', async () => {
   const rpc = { getAccountInfo: () => ({ send: async () => ({ value: { owner: '11111111111111111111111111111111' } }) }) };
   await assert.rejects(transferInstructions(rpc, { address: USDC, decimals: 6, symbol: 'USDC' }, PAYER, DEPOSIT, 5n), /not a token/);
 });
+
+test('tries a known-good endpoint first, LI.FI next, the official one last, each once', async () => {
+  const { rpcUrls } = await import('../src/transfer-solana.js');
+  assert.deepEqual(rpcUrls(['https://api.mainnet-beta.solana.com', 'https://solana-rpc.publicnode.com', 'https://other.example']),
+    ['https://solana-rpc.publicnode.com', 'https://other.example', 'https://api.mainnet-beta.solana.com']);
+  assert.deepEqual(rpcUrls(undefined), ['https://solana-rpc.publicnode.com', 'https://api.mainnet-beta.solana.com']);
+});
+
+test('an endpoint answering HTTP 403 is skipped, as the browser saw from the official one', async () => {
+  const { failoverRpc } = await import('../src/transfer-solana.js');
+  const httpError = Object.assign(new Error('Solana error #8100002'), { context: { __code: 8100002, statusCode: 403 } });
+  const calls = [];
+  const blocked = { getLatestBlockhash: () => ({ send: async () => { calls.push('blocked'); throw httpError; } }) };
+  const good = { getLatestBlockhash: () => ({ send: async () => { calls.push('good'); return { value: 'hash' }; } }) };
+  const rpc = failoverRpc([blocked, good]);
+  assert.deepEqual(await rpc.getLatestBlockhash().send(), { value: 'hash' });
+  assert.deepEqual(calls, ['blocked', 'good']);
+});
+
+test('an answer from the chain is final, even an error: never sent to another endpoint', async () => {
+  const { failoverRpc } = await import('../src/transfer-solana.js');
+  const chainError = Object.assign(new Error('Transaction simulation failed'), { context: { __code: -32002 } });
+  let second = false;
+  const rpc = failoverRpc([
+    { sendTransaction: () => ({ send: async () => { throw chainError; } }) },
+    { sendTransaction: () => ({ send: async () => { second = true; return 'sig'; } }) },
+  ]);
+  await assert.rejects(rpc.sendTransaction('tx').send(), /simulation failed/);
+  assert.equal(second, false);
+});
+
+test('no endpoint reachable gives a plain message', async () => {
+  const { failoverRpc } = await import('../src/transfer-solana.js');
+  const down = { getAccountInfo: () => ({ send: async () => { throw new TypeError('Failed to fetch'); } }) };
+  await assert.rejects(failoverRpc([down, down]).getAccountInfo('x').send(), /could not be reached/);
+});
+
+test('a bare Solana error code is shown in plain words', async () => {
+  const { solanaErrorText } = await import('../src/offers.js');
+  assert.match(solanaErrorText("Solana error #8100002; Decode this error by running `npx @solana/errors decode -- 8100002 'X19j'`"), /could not be reached/);
+  assert.match(solanaErrorText('Solana error #7050001'), /Solana error 7050001/);
+  assert.equal(solanaErrorText('You cancelled the transaction in your wallet.'), null);
+});
