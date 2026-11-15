@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.1
+
+- **Fix: Solana payments through NEAR Intents failed with "Solana error #8100002".** The wallet panel built the Solana transfer with the first RPC endpoint LI.FI lists, `api.mainnet-beta.solana.com`, which refuses requests from web pages (HTTP 403). Every NEAR Intents payment of SOL or a Solana token failed before the wallet was asked to sign; payments routed through LI.FI were not affected. Each RPC call now goes to the first endpoint that answers (a known-good public endpoint, then LI.FI's, then the official one). Only an endpoint failure moves on; an answer from the chain is final.
+- Solana library errors are shown in plain words instead of a bare error code.
+
 ## 0.13.0
 
 - **NEAR Intents in the wallet checkout, as backup and when cheaper:** for the token the customer picks, the panel asks LI.FI and NEAR Intents what it must be to deliver the BTC due, and shows and pays the lower one. Same panel, same single signature: a NEAR Intents payment is a plain transfer from the wallet to a one-time deposit address made for this invoice. Makes tokens LI.FI cannot route payable (most of Solana and Tron), and is often cheaper (about 3% instead of about 5% for SOL on a ~$75 order in testing).

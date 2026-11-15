@@ -39,3 +39,14 @@ export function signsAs(client, from) {
   const signer = client?.account?.address;
   return typeof signer === 'string' && typeof from === 'string' && signer.toLowerCase() === from.toLowerCase();
 }
+
+/**
+ * A customer-readable text for an error whose message is a bare Solana library code ("Solana error #8100002; Decode
+ * this error by running ..."), which production builds show instead of a description. Null for any other message.
+ */
+export function solanaErrorText(message) {
+  const m = /Solana error #(\d+)/.exec(String(message));
+  if (!m) return null;
+  if (m[1] === '8100002') return 'The Solana network could not be reached. Please try again in a moment.';
+  return `The payment could not be sent (Solana error ${m[1]}). Please try again, or contact the store with this invoice.`;
+}

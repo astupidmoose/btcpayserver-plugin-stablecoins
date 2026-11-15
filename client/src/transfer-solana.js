@@ -22,7 +22,43 @@ const SYSTEM_PROGRAM = address('11111111111111111111111111111111');
 const ATA_PROGRAM = address('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 const TOKEN_PROGRAMS = new Set(['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb']);
 const SOLANA_MAINNET = 'solana:mainnet';
-const FALLBACK_RPC = 'https://api.mainnet-beta.solana.com';
+// Public Solana RPC endpoints a checkout page can use. Solana's own api.mainnet-beta.solana.com refuses requests from web
+// pages (HTTP 403), and LI.FI lists it first, so every call goes to the first endpoint that answers.
+const KNOWN_GOOD_RPC = 'https://solana-rpc.publicnode.com';
+const LAST_RESORT_RPC = 'https://api.mainnet-beta.solana.com';
+// @solana/errors: SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR, the endpoint answered with an HTTP error.
+const HTTP_ERROR = 8100002;
+
+/** The endpoints to try, in order: the known-good one, then LI.FI's, then the official one; no duplicates. */
+export function rpcUrls(fromLifi) {
+  return [...new Set([KNOWN_GOOD_RPC, ...(fromLifi || []).filter((u) => u !== LAST_RESORT_RPC), LAST_RESORT_RPC])];
+}
+
+/** True when the endpoint itself failed (HTTP error, or no answer at all), so the request did nothing and another can take it. */
+export function unreachable(e) {
+  return e?.context?.__code === HTTP_ERROR || (e instanceof TypeError && /fetch|network|load failed/i.test(e.message));
+}
+
+/**
+ * An RPC whose calls go to the first endpoint that answers. Only an endpoint failure moves on to the next one; whatever
+ * the chain answers, error or not, is final. Resending a signed transaction is safe: the chain knows it by its signature.
+ */
+export function failoverRpc(rpcs) {
+  const call = async (run) => {
+    let last;
+    for (const rpc of rpcs) {
+      try {
+        return await run(rpc);
+      } catch (e) {
+        if (!unreachable(e)) throw e;
+        last = e;
+      }
+    }
+    throw new Error('The Solana network could not be reached. Please try again in a moment.', { cause: last });
+  };
+  const method = (name) => (...args) => ({ send: () => call((rpc) => rpc[name](...args).send()) });
+  return { getAccountInfo: method('getAccountInfo'), getLatestBlockhash: method('getLatestBlockhash'), sendTransaction: method('sendTransaction') };
+}
 
 function u64(value) {
   const bytes = new Uint8Array(8);
@@ -113,8 +149,8 @@ export async function solanaTransfer(wallet, { client, chain, token, to, amount,
   const connected = await wallet.getWallet();
   const account = connected.accounts.find((a) => a.address === from);
   if (!account) throw new Error('Your wallet changed. Reconnect it and try again.');
-  const urls = (await client.getRpcUrlsByChainId(chain.id).catch(() => [])) || [];
-  const rpc = createSolanaRpc(urls[0] || FALLBACK_RPC);
+  const urls = rpcUrls((await client.getRpcUrlsByChainId(chain.id).catch(() => [])) || []);
+  const rpc = failoverRpc(urls.map((url) => createSolanaRpc(url)));
   const instructions = await transferInstructions(rpc, token, from, to, amount);
   const { value: blockhash } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
   const message = pipe(
