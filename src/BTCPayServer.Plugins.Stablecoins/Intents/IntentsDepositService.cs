@@ -93,6 +93,20 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
 
     static readonly Newtonsoft.Json.JsonSerializer DetailsSerializer = BlobSerializer.CreateSerializer().Serializer;
 
+    /// <summary>
+    /// NEAR Intents' public tracker for a 1Click deposit address: what NEAR counted as deposited, the swap, the payout and any
+    /// refund. Written into the invoice's log so the store can check a payment there.
+    /// </summary>
+    public static string TrackerUrl(string depositAddress) =>
+        "https://explorer.near-intents.org/transactions/" + Uri.EscapeDataString(depositAddress.Trim());
+
+    /// <summary>
+    /// When NEAR Intents stops waiting for the deposit and refunds what arrived: the deadline asked for. The quote's own
+    /// deadline can be days later (when the address goes inactive), which is not when the swap is given up.
+    /// </summary>
+    public static DateTimeOffset RefundDeadline(DateTimeOffset requested, DateTimeOffset? quoted) =>
+        quoted is { } q && q < requested ? q : requested;
+
     class Quote
     {
         public required IntentsPayment Payment;
@@ -416,8 +430,10 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
             }
             await Log(invoiceId,
                 $"Wallet payment on {paidFrom.Name}: the customer's wallet {fromAddress} is to send {payment.Amount} {origin.Symbol} to NEAR Intents " +
-                $"deposit {payment.Address}. Quote {response.CorrelationId}: {amountOut} satoshis to {btcAddress}, deposit deadline {payment.Deadline:u}. " +
-                $"Anything NEAR Intents cannot swap, and any excess, is refunded to the customer's wallet {fromAddress}. Quote signature: {response.Signature}");
+                $"deposit {payment.Address}. Quote {response.CorrelationId}: {amountOut} satoshis to {btcAddress}, deposit deadline " +
+                $"{RefundDeadline(deadline, quote.Deadline):u} (what hasn't been swapped by then is refunded). " +
+                $"Anything NEAR Intents cannot swap, and any excess, is refunded to the customer's wallet {fromAddress}. Quote signature: {response.Signature}. " +
+                $"Track it: {TrackerUrl(payment.Address)}");
             // Support can find the invoice by the deposit address, the quote id, or the customer's wallet (as wallets show it, too).
             await SearchTerms(invoiceId, payment.Address, response.CorrelationId, fromAddress, SourceVerifier.Checksummed(fromAddress));
             return new WalletDeposit(payment.Address, amountIn, origin.Decimals, payment.Deadline);
@@ -488,8 +504,10 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
             await Log(entry.InvoiceId,
                 $"{chain.Ticker} on {network.Name}: send {payment.Amount} {chain.Ticker} to {payment.Address}" +
                 (payment.Memo is null ? "" : $" with memo {payment.Memo}") +
-                $". NEAR Intents quote {response.CorrelationId}: {amountOut} satoshis to {btcAddress}, deposit deadline {payment.Deadline:u}. " +
-                $"Unswapped or excess {chain.Ticker} is refunded to {config.RefundAddress(network.Family)}. Quote signature: {response.Signature}");
+                $". NEAR Intents quote {response.CorrelationId}: {amountOut} satoshis to {btcAddress}, deposit deadline " +
+                $"{RefundDeadline(deadline, quote.Deadline):u} (what hasn't been swapped by then is refunded). " +
+                $"Unswapped or excess {chain.Ticker} is refunded to {config.RefundAddress(network.Family)}. Quote signature: {response.Signature}. " +
+                $"Track it: {TrackerUrl(payment.Address)}");
             // Support can find the invoice by pasting the deposit address or the quote id into the invoice search.
             await SearchTerms(entry.InvoiceId, payment.Address, response.CorrelationId);
             await Save(entry);
@@ -531,7 +549,8 @@ public class IntentsDepositService(OneClickClient client, InvoiceRepository invo
             changed = updated.Status != payment.Status || updated.DepositedUnits != payment.DepositedUnits;
             if (updated.Status != payment.Status)
                 await Log(entry.InvoiceId, $"{coin} deposit to {payment.Address}: {updated.Status}" +
-                                           (status.SwapDetails?.RefundReason is { } reason ? $" ({reason})" : ""),
+                                           (status.SwapDetails?.RefundReason is { } reason ? $" ({reason})" : "") +
+                                           $". Track it: {TrackerUrl(payment.Address)}",
                     updated.Status is "REFUNDED" or "FAILED" ? InvoiceEventData.EventSeverity.Warning : InvoiceEventData.EventSeverity.Info);
             changed |= await LogTxs(entry.InvoiceId, quote, status.SwapDetails?.OriginChainTxHashes, $"Customer's {coin} deposit transaction");
             changed |= await LogTxs(entry.InvoiceId, quote, status.SwapDetails?.DestinationChainTxHashes, "NEAR Intents' BTC payout transaction");

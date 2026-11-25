@@ -144,6 +144,23 @@ public class IntentsDepositServiceTests
         Assert.False(service.BelowMinimum("eth", 0.001m));
     }
 
+    [Theory]
+    [InlineData("0xdeposit1", "https://explorer.near-intents.org/transactions/0xdeposit1")]
+    [InlineData(" 4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T ", "https://explorer.near-intents.org/transactions/4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T")]
+    [InlineData("a/b?c", "https://explorer.near-intents.org/transactions/a%2Fb%3Fc")]
+    public void LinksEachDepositToNearIntentsTracker(string depositAddress, string expected) =>
+        Assert.Equal(expected, IntentsDepositService.TrackerUrl(depositAddress));
+
+    [Fact]
+    public void TheLoggedDeadlineIsWhenNearIntentsRefundsNotWhenTheAddressGoesInactive()
+    {
+        var requested = new DateTimeOffset(2030, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        // 1Click answers with a deadline days later (when the address goes inactive), but refunds at the one asked for.
+        Assert.Equal(requested, IntentsDepositService.RefundDeadline(requested, requested.AddDays(3)));
+        Assert.Equal(requested, IntentsDepositService.RefundDeadline(requested, null));
+        Assert.Equal(requested.AddMinutes(-5), IntentsDepositService.RefundDeadline(requested, requested.AddMinutes(-5)));
+    }
+
     [Fact]
     public void RefusesNetworksItCannotRefundTo() =>
         Assert.Equal(IntentsState.Failed, Get(Create().Service, "inv2", "sol", 0.001m).State);
