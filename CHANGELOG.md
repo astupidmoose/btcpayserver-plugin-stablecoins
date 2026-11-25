@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.2
+
+- **Every NEAR Intents payment now has its tracker link in the invoice log.** The log line with the deposit address, and each status change (INCOMPLETE_DEPOSIT, SUCCESS, REFUNDED and so on), ends with "Track it:" and the payment's page on NEAR Intents' public explorer, which shows what NEAR counted as deposited, the swap, the BTC payout and any refund.
+- **The logged deposit deadline is now the one NEAR Intents refunds at.** It showed the deadline from the quote, which can be days later (when the deposit address goes inactive), while NEAR Intents refunds what hasn't been swapped at the deadline the plugin asks for. Only the log text changes; tracking is unchanged.
+
 ## 0.13.1
 
 - **Fix: Solana payments through NEAR Intents failed with "Solana error #8100002".** The wallet panel built the Solana transfer with the first RPC endpoint LI.FI lists, `api.mainnet-beta.solana.com`, which refuses requests from web pages (HTTP 403). Every NEAR Intents payment of SOL or a Solana token failed before the wallet was asked to sign; payments routed through LI.FI were not affected. Each RPC call now goes to the first endpoint that answers (a known-good public endpoint, then LI.FI's, then the official one). Only an endpoint failure moves on; an answer from the chain is final.
