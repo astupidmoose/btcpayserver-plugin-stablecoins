@@ -567,13 +567,18 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
             lock (entry)
             {
                 swap.PendingAdded = true;
+                // A retirement done while the order was overdue, before the XMR came late, retired nothing: this payment
+                // is new and must be watched until settled BTC replaces it.
+                swap.PendingRetired = false;
                 swap.SyncedAt = now;
             }
             return true;
         }
         if (retire && await pendingPayments.Retire(entry.InvoiceId, entry.PaymentMethodId, payment.OrderNumber,
                 swap.GaveUp
-                    ? $"Pegasus Swap order {payment.OrderNumber} has not paid out within {FollowFor.TotalHours:0} hours"
+                    ? payment.Status == PegasusStatus.Success
+                        ? $"Pegasus Swap order {payment.OrderNumber} paid out and has been followed for {FollowFor.TotalHours:0} hours; the BTC it sent counts on its own"
+                        : $"Pegasus Swap order {payment.OrderNumber} has not paid out within {FollowFor.TotalHours:0} hours"
                     : $"Pegasus Swap order {payment.OrderNumber} is {PegasusStatus.Name(payment.Status)}"))
         {
             lock (entry)
@@ -728,7 +733,11 @@ public class PegasusSwapService(PegasusClient client, InvoiceRepository invoiceR
                     Payment = new PegasusPayment(s.OrderNumber, s.Address, s.Memo, decimal.Parse(s.Amount, CultureInfo.InvariantCulture), s.TargetSats,
                         s.Status, s.Created, DateTimeOffset.MinValue, Btc(s.ReceiveBtc), s.DueSats, Btc(s.PayoutBtc)),
                     PendingAdded = s.PendingAdded,
-                    PendingRetired = s.PendingRetired,
+                    // Saved by 0.13.2 or earlier, a retirement done while the order was overdue stayed set when the XMR came
+                    // late and a pending payment was recorded: that payment was then never retired. Only a refunded or
+                    // overdue order keeps its retirement here; any other is checked again (retiring is idempotent, and
+                    // the BTC on the invoice decides).
+                    PendingRetired = s.PendingRetired && (!s.PendingAdded || s.Status is PegasusStatus.Refund or PegasusStatus.Overdue),
                     GaveUp = s.GaveUp
                 };
                 swap.LoggedTxs.UnionWith(s.LoggedTxs ?? []);

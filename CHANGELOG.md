@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.3
+
+- **Fix: a Monero payment that arrived after its swap went overdue was counted twice.** When the customer's XMR reached Pegasus Swap after the order was marked overdue, the plugin recorded a pending payment for the BTC to come, but a leftover "retired" mark from the overdue phase meant that pending payment was never watched. Once the real BTC arrived and settled, both counted: the invoice showed as overpaid, with a "Pending, Pegasus Swap order …" row that never went away. A newly recorded pending payment now clears that mark, so it stops counting as soon as settled BTC replaces it.
+- **Repairs invoices already affected.** After the update, a saved order that paid out but still has a pending payment counting is checked again: the pending payment stops counting once settled BTC on the invoice covers it, or when the order's 24-hour follow time is over.
+- Clearer log text when a pending payment counts again, and when one is retired after an order paid out and its follow time ended.
+
 ## 0.13.2
 
 - **Every NEAR Intents payment now has its tracker link in the invoice log.** The log line with the deposit address, and each status change (INCOMPLETE_DEPOSIT, SUCCESS, REFUNDED and so on), ends with "Track it:" and the payment's page on NEAR Intents' public explorer, which shows what NEAR counted as deposited, the swap, the BTC payout and any refund.

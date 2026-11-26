@@ -164,6 +164,8 @@ public class PegasusTests
         public List<string> Reinstated { get; } = new();
         public List<decimal?> PayoutsAsked { get; } = new();
         readonly Dictionary<string, bool> _counting = new();
+        /// <summary>A pending payment recorded before this test started (e.g. before a restart) that still counts.</summary>
+        public void Counting(string orderNumber) => _counting[orderNumber] = true;
         public Task<bool> Sync(string invoiceId, PaymentMethodId pmi, string orderNumber, decimal btc, DateTimeOffset orderCreated, decimal? payoutBtc, bool first)
         {
             Calls++;
@@ -751,6 +753,84 @@ public class PegasusTests
 
         var status = await Ready(service, Config(), 0.01m);
         Assert.Equal("O2", status.Payment!.OrderNumber);
+    }
+
+    [Fact]
+    public async Task AnOrderPaidAfterItWentOverdueRetiresItsPendingPaymentOnceTheBtcSettles()
+    {
+        var pending = new FakePending();
+        var (service, fake) = Create(pending: pending);
+        await Ready(service, Config(), 0.01m);
+        // Overdue first: nothing recorded yet, so retiring it does nothing.
+        fake.Status = PegasusStatus.Overdue;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(1);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Empty(pending.Added);
+
+        // The XMR arrives late and the exchange pays out: a pending payment is recorded for it.
+        fake.Status = PegasusStatus.Success;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(2);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.Added).Order);
+
+        // The BTC settles: the pending payment must stop counting, or the invoice shows as paid twice.
+        pending.Paid = true;
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(4);
+        await service.FollowAll(CancellationToken.None);
+        service.Now = () => DateTimeOffset.UtcNow.AddMinutes(6);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.RetiredPaid));
+    }
+
+    [Fact]
+    public async Task AStuckPendingPaymentSavedByAnEarlierVersionIsRetiredOnceTheBtcSettles()
+    {
+        var pending = new FakePending { Paid = true };
+        pending.Counting("O1");
+        var (service, _) = Create(pending: pending);
+        // Saved with the retirement from when it was overdue still set, after its pending payment was recorded.
+        service.Restore("inv9", "store1", Monero.PaymentMethodId, Config(),
+        [
+            new PersistedPegasusSwap { OrderNumber = "O1", Address = "8saved", Amount = "1.5", TargetSats = 1_000_000, Status = PegasusStatus.Success,
+                Created = DateTimeOffset.UtcNow.AddHours(-2), PendingAdded = true, PendingRetired = true, PayoutBtc = "0.01" }
+        ]);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.RetiredPaid));
+    }
+
+    [Fact]
+    public async Task AStuckPendingPaymentSavedByAnEarlierVersionIsRetiredOnceItsFollowTimeIsOver()
+    {
+        var pending = new FakePending();
+        var (service, _) = Create(pending: pending);
+        service.Restore("inv9", "store1", Monero.PaymentMethodId, Config(),
+        [
+            new PersistedPegasusSwap { OrderNumber = "O1", Address = "8saved", Amount = "1.5", TargetSats = 1_000_000, Status = PegasusStatus.Success,
+                Created = DateTimeOffset.UtcNow.AddHours(-30), PendingAdded = true, PendingRetired = true, PayoutBtc = "0.01" }
+        ]);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Equal("O1", Assert.Single(pending.Retired));
+        // Retired once, then left alone.
+        await service.FollowAll(CancellationToken.None);
+        Assert.Single(pending.Retired);
+    }
+
+    [Theory]
+    [InlineData(PegasusStatus.Refund)]
+    [InlineData(PegasusStatus.Overdue)]
+    public async Task ARetiredOrderThatStillWillNotPayOutStaysRetiredAfterARestart(int status)
+    {
+        var pending = new FakePending();
+        var (service, _) = Create(pending: pending);
+        service.Restore("inv9", "store1", Monero.PaymentMethodId, Config(),
+        [
+            new PersistedPegasusSwap { OrderNumber = "O1", Address = "8saved", Amount = "1.5", TargetSats = 1_000_000, Status = status,
+                Created = DateTimeOffset.UtcNow.AddHours(-2), PendingAdded = true, PendingRetired = true }
+        ]);
+        await service.FollowAll(CancellationToken.None);
+        Assert.Empty(pending.Retired);
+        Assert.Empty(pending.Added);
+        Assert.Empty(pending.Reinstated);
     }
 
     [Fact]
