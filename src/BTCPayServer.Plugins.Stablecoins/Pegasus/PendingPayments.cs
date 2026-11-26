@@ -107,7 +107,7 @@ public class PendingPayments(
                 existing.Status = PaymentStatus.Processing;
                 await paymentService.UpdatePayments([existing]);
                 eventAggregator.Publish(new InvoiceNeedUpdateEvent(invoiceId));
-                await Log(invoiceId, $"Pending payment of Pegasus Swap order {orderNumber} counted again: the BTC that replaced it no longer counts as settled.");
+                await Log(invoiceId, $"Pending payment of Pegasus Swap order {orderNumber} counted again: no settled BTC on the invoice replaces it.");
                 return true;
             }
             var data = new SwapToBtcPaymentData { PendingOrder = orderNumber };
